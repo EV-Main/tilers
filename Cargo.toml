@@ -1,0 +1,22 @@
+cargo-features = ["codegen-backend"]
+
+[workspace]
+members = ["dockview_dioxus", "dockview_dioxus_*"]
+resolver = "3"
+
+[workspace.lints.clippy]
+float_cmp = "allow"
+len_zero = "allow"
+undocumented_unsafe_blocks = "warn"
+tabs_in_doc_comments = "allow"
+doc_lazy_continuation = "allow"
+get_first = "allow"
+get_last_with_len = "allow"
+manual_is_multiple_of = "allow"
+
+[workspace.dependencies]
+derive-new = "^0"
+color-eyre = "^0.6.5"
+miette = { version = "^7.6.0", features = ["fancy", "serde", "syntect-highlighter"] }
+clap = { version = "^4.5.4", features = ["derive"] }
+v_utils = { version = "^2.15.0", features = ["io", "macros", "cli"] }
