@@ -54,6 +54,8 @@ pub struct PackedState {
 	root_size: (f64, f64),
 	/// The root's scroll offset: the tiles live in its scrolled content, the pointer in client px.
 	scroll: f64,
+	/// The view's edges may lie under a host's grips (see [`framed`]).
+	framed: bool,
 	/// The pane keyboard ops act on: set when a tile's header/tab/body is pressed. `maximized` is a
 	/// pure view toggle (no model mutation) — the focused tile fills the container, the rest hide.
 	focused: Option<GroupId>,
@@ -104,6 +106,7 @@ impl PackedState {
 			root_origin: (0.0, 0.0),
 			root_size: (0.0, 0.0),
 			scroll: 0.0,
+			framed: false,
 			focused: None,
 			maximized: None,
 			help: false,
@@ -323,10 +326,11 @@ impl PackedState {
 	/// Store the root's origin (to map pointer→grid space) and its content box, then reflow the
 	/// grid to fill it: classify the width into a responsive band, stretch `cols` across the
 	/// container's width (a horizontal step is `width / cols`, cols scaled per band; a vertical one is
-	/// [`Config::row_h_rem`]), and refloor tiles onto the new step.
-	pub fn set_measure(&mut self, origin: (f64, f64), size: (f64, f64)) {
+	/// [`Config::row_h_rem`]), and refloor tiles onto the new step. `framed`: see [`framed`].
+	pub fn set_measure(&mut self, origin: (f64, f64), size: (f64, f64), framed: bool) {
 		self.root_origin = origin;
 		self.root_size = size;
+		self.framed = framed;
 		self.rem_px = root_font_px();
 		let (width, height) = size;
 		if width <= 0.0 || height <= 0.0 {
@@ -805,10 +809,10 @@ impl PackedState {
 
 	/// Tile `idx`'s grips in paint order (the corner last, over the edges' ends) with their inline
 	/// styles. A boundary between two tiles is the left one's right grip alone, so a left grip exists
-	/// only on a free left edge. A grip that would lie on the view's own edge, where a host dock's grip
-	/// lies when this dock is nested in one of its tiles, keeps clear of it: the right one of a tile
-	/// on the view's right edge is a [`Grip::Wall`], the bottom one of a tile reaching the view's last
-	/// grip-thickness a [`Grip::Fold`], which the stylesheet places from `--tl-fold`, the view's bottom
+	/// only on a free left edge. In a [`framed`] view, a grip that would lie on the view's own edge,
+	/// under a host's grip, keeps clear of it: the right one of a tile
+	/// on the view's right edge is a [`Grip::Wall`], the bottom one of a tile reaching that band a
+	/// [`Grip::Fold`], which the stylesheet places from `--tl-fold`, the view's bottom
 	/// below the tile's top.
 	fn grips(&self, g: &PackedGrid, idx: usize, maximized: bool) -> Vec<(Grip, String)> {
 		let c = &g.cells[idx];
@@ -816,10 +820,11 @@ impl PackedState {
 		let view_bottom = self.scroll + self.root_size.1;
 		let (top, bottom) = (c.y as f64 * sh, (c.y + c.h) as f64 * sh);
 		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
-		let folded = !maximized && top < view_bottom && bottom > view_bottom - grip;
+		// A host's grip is guessed at most twice ours: its root font may be larger.
+		let folded = self.framed && !maximized && top < view_bottom && bottom > view_bottom - 2.0 * grip;
 		[
 			g.free_left(idx).then_some((Grip::Left, String::new())),
-			Some((if !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
+			Some((if self.framed && !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
 			Some(if folded { (Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top)) } else { (Grip::Bottom, String::new()) }),
 			Some((Grip::Corner, String::new())),
 		]
@@ -1019,8 +1024,8 @@ pub struct Ghost {
 }
 /// Where a tile is taken to resize it. `Left`/`Right` move that edge of its tile alone, pushing the
 /// tiles it grows into ([`PackedGrid::resized`]); `Bottom` sets the height; the corner is `Right` and
-/// `Bottom` at once. Where the right or bottom grip would reach into the view's last grip-thickness,
-/// `Wall` and `Fold` stand in for them just before it, and only shrink the tile. The edges are
+/// `Bottom` at once. In a framed view, where the right or bottom grip would reach into the band a
+/// host's grip may cover, `Wall` and `Fold` stand in for them just before it, and only shrink the tile. The edges are
 /// thin strips over the content's own; nothing is taken from it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Grip {
@@ -1052,6 +1057,16 @@ impl Grip {
 			Self::Wall => "w-resize",
 		}
 	}
+}
+
+/// Whether a dock's view edges may lie under a host's grips: its document is framed (a cross-origin
+/// frame hides its element, which is still a frame), or its root sits in another dock's tile. Read
+/// by the bindings for [`PackedState::set_measure`].
+#[cfg(target_arch = "wasm32")]
+pub fn framed(root: &web_sys::Element) -> bool {
+	let win = web_sys::window().expect("a mounted root has a window");
+	!matches!(win.frame_element(), Ok(None))
+		|| root.parent_element().is_some_and(|p| p.closest(".tl-tile").expect("a constant, valid selector").is_some())
 }
 
 /// A cached layout that couldn't be used. Loud on purpose: a seed cache that silently wipes itself

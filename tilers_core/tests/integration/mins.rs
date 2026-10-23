@@ -21,16 +21,16 @@ fn content_min_holds_as_the_view_shrinks() {
 	let mut state = PackedState::new(Config::default());
 	let panel = PanelId("table".into());
 	state.set_mins(HashMap::from([(panel.clone(), MinSize::Px { w: 0.0, h: content_h })]));
-	state.set_measure(ORIGIN, (WIDTH, 974.0));
+	state.set_measure(ORIGIN, (WIDTH, 974.0), false);
 	assert_eq!(state.take_band(), Some(false), "first measure is a miss natively");
 	state.place(Group::new(GroupId(0), panel), 8, 4);
 	let wanted = tile_px_h(&state);
 	assert!(wanted >= content_h + state.title_h(), "placed below its min: {wanted}px");
 
-	state.set_measure(ORIGIN, (WIDTH, 400.0));
+	state.set_measure(ORIGIN, (WIDTH, 400.0), false);
 	let shrunk = tile_px_h(&state);
 	assert!(shrunk >= content_h + state.title_h(), "a shorter view squeezed the content: {shrunk}px < {content_h}px + chrome");
 
-	state.set_measure(ORIGIN, (WIDTH, 974.0));
+	state.set_measure(ORIGIN, (WIDTH, 974.0), false);
 	assert_eq!(tile_px_h(&state), wanted, "the tall view didn't restore the wanted height");
 }

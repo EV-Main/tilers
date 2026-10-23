@@ -4,9 +4,9 @@
 
 Resizing a panel by its side pushes the panels it grows into, which give up the space, instead of
 shoving them down; shrinking it leaves its neighbours where they are. A left edge with room beside it
-has a grip of its own. Dragging back restores what a resize shrank. A panel on the right edge of the
-view, or reaching its bottom, has that grip just inside the edge, clear of the frame's own; it only
-shrinks the panel.
+has a grip of its own. Dragging back restores what a resize shrank. Framed in another page, a panel on
+the right edge of the view, or reaching its bottom, has that grip just inside the edge, clear of the
+frame's own; it only shrinks the panel.
 `leader s s` says it cached the layout in a toast.
 The leader is `Alt+z` (was `Alt+t`), and binds match the key your layout sends, never its physical
 position.

@@ -151,7 +151,7 @@ pub fn PackedArea(
 		on_cleanup(move || held.take().0.disconnect());
 	}
 	#[cfg(not(target_arch = "wasm32"))]
-	root.on_load(move |el| measure(el.into(), state, api, on_band.as_ref()));
+	let _ = (api, &on_band); // nothing measures without a DOM
 
 	// A panel's declared min is host intent the state re-derives floors from.
 	Effect::new(move |_| {
@@ -539,9 +539,11 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 /// Hand the root's origin + content box to the core measure, then resolve the band: the latch has
 /// already restored-or-reset the grid by the time `on_band` runs, so the host only fills in what it
 /// left behind — and only then lists every panel a restored layout hosts, so its floors land after.
+#[cfg(target_arch = "wasm32")]
 fn measure(el: web_sys::Element, state: RwSignal<PackedState, LocalStorage>, api: PackedApi, on_band: Option<&Arc<dyn Fn(PackedApi) + Send + Sync>>) {
 	let rect = el.get_bounding_client_rect();
-	state.update(|s| s.set_measure((rect.x(), rect.y()), (el.client_width() as f64, el.client_height() as f64)));
+	let framed = tilers_core::framed(&el);
+	state.update(|s| s.set_measure((rect.x(), rect.y()), (el.client_width() as f64, el.client_height() as f64), framed));
 	if state.try_update(|s| s.take_band()).expect("state signal alive").is_some() {
 		if let Some(cb) = on_band {
 			cb(api);

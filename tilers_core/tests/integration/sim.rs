@@ -38,6 +38,8 @@ pub struct World {
 	pub size: (f64, f64),
 	/// The root's scroll offset, as the binding reports it.
 	pub scroll: f64,
+	/// Whether the view's edges may lie under a host's grips, as the binding measures it.
+	pub framed: bool,
 	pub cursor: (f64, f64),
 	/// The [`Band`] the latch has already resolved — what `take_band` is asserted against.
 	pub band: Option<Band>,
@@ -71,7 +73,7 @@ impl World {
 	pub fn settled(&self, grid: &PackedGrid) -> Result<PackedGrid, String> {
 		let mut fresh = PackedState::new(self.cfg.clone());
 		fresh.set_mins(self.mins.clone());
-		fresh.set_measure(self.origin, self.size);
+		fresh.set_measure(self.origin, self.size, self.framed);
 		fresh.load(&tilers_core::model::serial::save(grid)).map_err(|e| format!("load of our own save failed: {e:?}"))?;
 		Ok(fresh.grid().clone())
 	}
@@ -86,11 +88,12 @@ impl World {
 	/// last structural edit fails to reproduce its arrangement — i.e. resizing away and back left a
 	/// lasting impact, which is invalid — or if a change of height alone moved or resized a tile:
 	/// height only decides how much of the layout shows.
-	pub fn measure(&mut self, w: f64, h: f64) -> Result<(), String> {
+	pub fn measure(&mut self, w: f64, h: f64, framed: bool) -> Result<(), String> {
 		let frames = |s: &PackedState| s.frames(&HashMap::new()).into_iter().map(|f| f.style).collect::<Vec<_>>();
 		let before = (self.size.0 == w).then(|| frames(&self.state));
 		self.size = (w, h);
-		self.state.set_measure(self.origin, self.size);
+		self.framed = framed;
+		self.state.set_measure(self.origin, self.size, framed);
 		self.resolve_band()?;
 		if let Some(before) = before
 			&& frames(&self.state) != before
@@ -238,6 +241,7 @@ fn seed_world(frng: &mut Frng) -> World {
 		origin: (17.0, 23.0),
 		size: (0.0, 0.0),
 		scroll: 0.0,
+		framed: false,
 		cursor: (0.0, 0.0),
 		band: None,
 		measure_log: Vec::new(),
@@ -246,7 +250,7 @@ fn seed_world(frng: &mut Frng) -> World {
 	};
 	// Seed-derived initial container size, so different runs start packed in different bands.
 	let (w, h) = (frng.span(MIN_W, MAX_W), frng.span(MIN_H, MAX_H));
-	world.measure(w, h).expect("the first measure has no baseline to contradict");
+	world.measure(w, h, frng.below(2) == 0).expect("the first measure has no baseline to contradict");
 	world.settle();
 	world
 }

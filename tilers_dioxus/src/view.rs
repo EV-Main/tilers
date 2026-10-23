@@ -431,7 +431,7 @@ fn mins_of(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
 #[cfg(target_arch = "wasm32")]
 fn measure(el: &web_sys::Element, mut state: Signal<PackedState>, api: PackedApi, on_band: Option<Callback<PackedApi>>) {
 	let rect = el.get_bounding_client_rect();
-	state.write().set_measure((rect.x(), rect.y()), (el.client_width() as f64, el.client_height() as f64));
+	state.write().set_measure((rect.x(), rect.y()), (el.client_width() as f64, el.client_height() as f64), tilers_core::framed(el));
 	// The latch resolves the band's cache itself; `on_band` only fills in what it left behind — and
 	// only then lists every panel a restored layout hosts, so its floors land after.
 	if state.write().take_band().is_some() {

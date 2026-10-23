@@ -58,7 +58,7 @@ fn seeded(cfg: Config) -> PackedState {
 	let mut s = PackedState::new(cfg);
 	let mins = (0..2).map(|i| (PanelId(format!("p{i}")), MinSize::Steps { w: Step(1), h: Step(1) })).collect();
 	s.set_mins(mins);
-	s.set_measure((0.0, 0.0), (1600.0, 900.0));
+	s.set_measure((0.0, 0.0), (1600.0, 900.0), false);
 	assert_eq!(s.take_band(), Some(false), "first measure is a miss natively");
 	for i in 0..2 {
 		let gid = s.mint_group_id();

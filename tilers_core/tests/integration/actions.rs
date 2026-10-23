@@ -47,6 +47,7 @@ pub enum Action {
 	Measure {
 		w: f64,
 		h: f64,
+		framed: bool,
 	},
 	Place {
 		w: u32,
@@ -118,7 +119,7 @@ pub fn noisy(inputs: &[KeyInput]) -> bool {
 /// in-flight oracle, so an observer sees a gesture as the several events it is.
 pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	match action {
-		Action::Measure { w, h } => return world.measure(*w, *h),
+		Action::Measure { w, h, framed } => return world.measure(*w, *h, *framed),
 		Action::Place { w, h, min } => {
 			world.structural_edit();
 			let gid = world.state.mint_group_id();
@@ -234,7 +235,11 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			} else {
 				frng.span(MIN_W, MAX_W)
 			};
-			Action::Measure { w, h: frng.span(MIN_H, MAX_H) }
+			Action::Measure {
+				w,
+				h: frng.span(MIN_H, MAX_H),
+				framed: frng.below(2) == 0,
+			}
 		}
 		PLACE => {
 			// Sized as a fraction of what shows, so a tile stays a pane rather than a sliver.
@@ -294,11 +299,11 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 				Grip::Corner => (r, b),
 				Grip::Left => (ox + c.x as f64 * sw, mid_y),
 				Grip::Right => (r, mid_y),
-				Grip::Wall => (ox + world.size.0 - 1.0 - world.state.title_h() * 3.0 / 16.0, mid_y),
+				// Their middles, as the stylesheet places them: just before the view's last two grip-thicknesses
+				// (an eighth of the title bar each) and 1px border.
+				Grip::Wall => (ox + world.size.0 - 1.0 - world.state.title_h() * 5.0 / 16.0, mid_y),
 				Grip::Bottom => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, b),
-				// Its middle, as the stylesheet places it: one grip's thickness (an eighth of the title bar)
-				// clear of the view's bottom, inside the tile's 1px border.
-				Grip::Fold => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 3.0 / 16.0),
+				Grip::Fold => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 5.0 / 16.0),
 			};
 			let to = aim(frng, world);
 			Action::Resize {

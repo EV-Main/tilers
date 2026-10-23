@@ -48,10 +48,11 @@ pub const CSS: &str = r#"
 .tl-resize-bottom { left: 0; right: 0; bottom: 0; height: calc(var(--tl-title-h, 2rem) / 8); cursor: ns-resize; }
 .tl-resize-left, .tl-resize-right, .tl-resize-wall { top: var(--tl-title-h, 2rem); bottom: 0; width: calc(var(--tl-title-h, 2rem) / 8); cursor: ew-resize; }
 .tl-resize-left { left: 0; }
-/* Just before the view's last grip-thickness and 1px border, where a host dock's own grip lies when this
-   dock is nested in one of its tiles. Measured from inside the tile's 1px border. */
-.tl-resize-wall { right: calc(var(--tl-title-h, 2rem) / 8); cursor: w-resize; }
-.tl-resize-fold { left: 0; right: 0; top: calc(var(--tl-fold) - 2px - var(--tl-title-h, 2rem) / 4); height: calc(var(--tl-title-h, 2rem) / 8); cursor: n-resize; }
+/* Just before the band a host dock's own grip may cover when this dock is framed in one of its tiles:
+   the view's last two grip-thicknesses (a host's root font may be larger) and its 1px border. Measured
+   from inside the tile's 1px border. */
+.tl-resize-wall { right: calc(var(--tl-title-h, 2rem) / 4); cursor: w-resize; }
+.tl-resize-fold { left: 0; right: 0; top: calc(var(--tl-fold) - 2px - var(--tl-title-h, 2rem) * 3 / 8); height: calc(var(--tl-title-h, 2rem) / 8); cursor: n-resize; }
 .tl-resize-right { right: 0; }
 .tl-resize-bottom:hover, .tl-resize-fold:hover, .tl-resize-left:hover, .tl-resize-right:hover, .tl-resize-wall:hover { background: var(--tl-resize-bg, #555); }
 /* Content keeps the whole body; only its scrollbars give way: they stop short of the corner, and their

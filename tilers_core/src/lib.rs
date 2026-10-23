@@ -22,4 +22,6 @@ pub use model::{
 	Group, GroupId, PanelId,
 	packed::{MinSize, PackedGrid, Step},
 };
+#[cfg(target_arch = "wasm32")]
+pub use state::framed;
 pub use state::{ContentSlot, Frame, Ghost, Grip, Notice, PackedState};

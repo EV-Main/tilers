@@ -134,23 +134,30 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	}
 
 	// A host dock's bottom and right grips cover its tile's last grip-thickness and 1px border: this
-	// view's own edges, when the dock is nested in that tile. An edge grip running along inside that
+	// view's own edges, when the dock is framed in that tile. Its root font may be larger than ours,
+	// so its grip is guessed at up to twice ours. An edge grip running along inside that
 	// band would lie under the host's, and neither would be sure to get the pointer. The rects mirror
-	// the stylesheet's grip geometry.
+	// the stylesheet's grip geometry. Unframed, nothing lies past the view's edges to keep clear of.
 	let (t, title) = (state.title_h() / 8.0, state.title_h());
 	let (view_right, view_bottom) = (world.size.0, world.scroll + world.size.1);
 	for f in &frames {
 		let Some([l, top, w, h]) = rect(&f.style) else { continue };
 		for (grip, style) in &f.grips {
 			let fold = || style.trim_start_matches("--tl-fold:").trim_end_matches("px;").parse::<f64>().expect("a fold grip carries its --tl-fold");
+			if !world.framed {
+				if matches!(grip, Grip::Wall | Grip::Fold) {
+					return Err(format!("{:?} has a {grip:?} grip in a view nothing frames", f.gid));
+				}
+				continue;
+			}
 			let (span, edge) = match grip {
 				Grip::Right => ((l + w - 1.0 - t, l + w - 1.0), view_right),
-				Grip::Wall => ((l + w - 1.0 - 2.0 * t, l + w - 1.0 - t), view_right),
+				Grip::Wall => ((l + w - 1.0 - 3.0 * t, l + w - 1.0 - 2.0 * t), view_right),
 				Grip::Bottom => ((top + h - 1.0 - t, top + h - 1.0), view_bottom),
-				Grip::Fold => ((top + fold() - 1.0 - 2.0 * t, top + fold() - 1.0 - t), view_bottom),
+				Grip::Fold => ((top + fold() - 1.0 - 3.0 * t, top + fold() - 1.0 - 2.0 * t), view_bottom),
 				Grip::Left | Grip::Corner => continue,
 			};
-			if span.1 > edge - 1.0 - t + HAIRLINE && span.0 < edge - 1.0 - HAIRLINE && top + title < view_bottom {
+			if span.1 > edge - 1.0 - 2.0 * t + HAIRLINE && span.0 < edge - 1.0 - HAIRLINE && top + title < view_bottom {
 				return Err(format!("{:?}'s {grip:?} grip at {span:?} runs inside the view's edge band ending at {edge}", f.gid));
 			}
 		}

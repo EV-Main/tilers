@@ -243,7 +243,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u32 {
 fn summary(action: &actions::Action, world: &sim::World) -> String {
 	use actions::{Action as A, Grab};
 	match action {
-		A::Measure { w, h } => format!("Measure {w:.0}x{h:.0}"),
+		A::Measure { w, h, framed } => format!("Measure {w:.0}x{h:.0}{}", if *framed { " framed" } else { "" }),
 		A::Place { w, h, min } => format!("Place {w}x{h} min={}", min_label(min)),
 		A::AddTab { group, .. } => format!("AddTab into g{}", group.0),
 		A::Focus { group } => format!("Focus g{}", group.0),
