@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tilers_core::{
-	MinSize, PackedState,
+	Grip, MinSize,
 	model::{packed::GridState, serial},
 };
 
@@ -90,13 +90,14 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 	if !grid.cells.is_empty() && state.frames(&HashMap::new()).is_empty() {
 		return Err("a non-empty grid rendered no frames (maximized names a dead group?)".to_string());
 	}
-	check_in_flight(state)
+	check_in_flight(world)
 }
 
 /// Checked after every pointer move as well as at rest: the grid is packed, the rects a binding
 /// would actually paint don't overlap, the skeleton and the content overlay agree about where each
 /// panel goes, and the drop feedback matches whether the drag has armed.
-pub fn check_in_flight(state: &PackedState) -> Result<(), String> {
+pub fn check_in_flight(world: &World) -> Result<(), String> {
+	let state = &world.state;
 	let grid = state.grid();
 	if let Some((i, j)) = grid.overlaps() {
 		return Err(format!("overlap: {:?} vs {:?}", grid.cells[i], grid.cells[j]));
@@ -129,6 +130,29 @@ pub fn check_in_flight(state: &PackedState) -> Result<(), String> {
 		};
 		if s != f {
 			return Err(format!("panel {} slot {s:?} drifted from its frame {f:?}", panel.0));
+		}
+	}
+
+	// A host dock's bottom and right grips cover its tile's last grip-thickness and 1px border: this
+	// view's own edges, when the dock is nested in that tile. An edge grip running along inside that
+	// band would lie under the host's, and neither would be sure to get the pointer. The rects mirror
+	// the stylesheet's grip geometry.
+	let (t, title) = (state.title_h() / 8.0, state.title_h());
+	let (view_right, view_bottom) = (world.size.0, world.scroll + world.size.1);
+	for f in &frames {
+		let Some([l, top, w, h]) = rect(&f.style) else { continue };
+		for (grip, style) in &f.grips {
+			let fold = || style.trim_start_matches("--tl-fold:").trim_end_matches("px;").parse::<f64>().expect("a fold grip carries its --tl-fold");
+			let (span, edge) = match grip {
+				Grip::Right => ((l + w - 1.0 - t, l + w - 1.0), view_right),
+				Grip::Wall => ((l + w - 1.0 - 2.0 * t, l + w - 1.0 - t), view_right),
+				Grip::Bottom => ((top + h - 1.0 - t, top + h - 1.0), view_bottom),
+				Grip::Fold => ((top + fold() - 1.0 - 2.0 * t, top + fold() - 1.0 - t), view_bottom),
+				Grip::Left | Grip::Corner => continue,
+			};
+			if span.1 > edge - 1.0 - t + HAIRLINE && span.0 < edge - 1.0 - HAIRLINE && top + title < view_bottom {
+				return Err(format!("{:?}'s {grip:?} grip at {span:?} runs inside the view's edge band ending at {edge}", f.gid));
+			}
 		}
 	}
 

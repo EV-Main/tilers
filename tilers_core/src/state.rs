@@ -52,6 +52,8 @@ pub struct PackedState {
 	resize: Option<ResizeStart>,
 	root_origin: (f64, f64),
 	root_size: (f64, f64),
+	/// The root's scroll offset: the tiles live in its scrolled content, the pointer in client px.
+	scroll: f64,
 	/// The pane keyboard ops act on: set when a tile's header/tab/body is pressed. `maximized` is a
 	/// pure view toggle (no model mutation) — the focused tile fills the container, the rest hide.
 	focused: Option<GroupId>,
@@ -101,6 +103,7 @@ impl PackedState {
 			resize: None,
 			root_origin: (0.0, 0.0),
 			root_size: (0.0, 0.0),
+			scroll: 0.0,
 			focused: None,
 			maximized: None,
 			help: false,
@@ -198,8 +201,14 @@ impl PackedState {
 		let (mut left, mut right, mut h) = (c.x, c.x + c.w, c.h);
 		match r.grip {
 			Grip::Left => left = shift(left, r.press_at.0, r.cursor.0, sw),
-			Grip::Right => right = shift(right, r.press_at.0, r.cursor.0, sw),
+			Grip::Right | Grip::Wall => right = shift(right, r.press_at.0, r.cursor.0, sw),
 			Grip::Bottom => h = shift(h, r.press_at.1, r.cursor.1, sh),
+			// Above the fold the tile's bottom is where it shows: pulling up brings it to the pointer.
+			Grip::Fold if shift(h, r.press_at.1, r.cursor.1, sh) < h => {
+				let row = ((r.cursor.1 - self.root_origin.1 + self.scroll) / sh).round() as i64;
+				h = (row - c.y as i64).clamp(1, h as i64) as u32;
+			}
+			Grip::Fold => {}
 			Grip::Corner => (right, h) = (shift(right, r.press_at.0, r.cursor.0, sw), shift(h, r.press_at.1, r.cursor.1, sh)),
 		}
 		self.grid = r.press.resized(idx, left, right, h.max(1), self.cols);
@@ -332,6 +341,10 @@ impl PackedState {
 		self.refloor();
 	}
 
+	pub fn set_scroll(&mut self, y: f64) {
+		self.scroll = y;
+	}
+
 	/// Whether [`capture_undo`](Self::capture_undo) would actually push. A binding that captures via
 	/// a single-signal effect reads this first (to subscribe) and only writes when it's `true`, so
 	/// the resulting write doesn't re-fire the effect into a loop.
@@ -433,8 +446,8 @@ impl PackedState {
 
 	/// Advance an in-flight drag: arm past the `DRAG_THRESHOLD`, then resolve the live
 	/// [`DropTarget`], refining a `Tab` slot from the preview's tab geometry (via `tab_drop_index`,
-	/// a no-op without a DOM). `scroll_y` bridges client space to the root's scrolled content space.
-	pub fn drag_move(&mut self, cursor: (f64, f64), scroll_y: f64) {
+	/// a no-op without a DOM).
+	pub fn drag_move(&mut self, cursor: (f64, f64)) {
 		let Some(mut d) = self.drag.clone() else { return };
 		d.cursor = cursor;
 		if !d.armed {
@@ -454,9 +467,9 @@ impl PackedState {
 		let mut t = self.grid.resolve_target(
 			&d.source,
 			cx - ox,
-			cy - oy + scroll_y,
+			cy - oy + self.scroll,
 			cursor.0 - ox,
-			cursor.1 - oy + scroll_y,
+			cursor.1 - oy + self.scroll,
 			sw,
 			sh,
 			self.title_h(),
@@ -772,7 +785,7 @@ impl PackedState {
 					shadow: true,
 					tab_drop: false,
 					tabs: Vec::new(),
-					grips: &[],
+					grips: Vec::new(),
 				});
 				continue;
 			}
@@ -784,10 +797,35 @@ impl PackedState {
 				shadow: false,
 				tab_drop,
 				tabs,
-				grips: Grip::on(g.free_left(idx)),
+				grips: self.grips(&g, idx, maximized == Some(gid)),
 			});
 		}
 		out
+	}
+
+	/// Tile `idx`'s grips in paint order (the corner last, over the edges' ends) with their inline
+	/// styles. A boundary between two tiles is the left one's right grip alone, so a left grip exists
+	/// only on a free left edge. A grip that would lie on the view's own edge, where a host dock's grip
+	/// lies when this dock is nested in one of its tiles, keeps clear of it: the right one of a tile
+	/// on the view's right edge is a [`Grip::Wall`], the bottom one of a tile reaching the view's last
+	/// grip-thickness a [`Grip::Fold`], which the stylesheet places from `--tl-fold`, the view's bottom
+	/// below the tile's top.
+	fn grips(&self, g: &PackedGrid, idx: usize, maximized: bool) -> Vec<(Grip, String)> {
+		let c = &g.cells[idx];
+		let sh = self.step_px.1;
+		let view_bottom = self.scroll + self.root_size.1;
+		let (top, bottom) = (c.y as f64 * sh, (c.y + c.h) as f64 * sh);
+		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
+		let folded = !maximized && top < view_bottom && bottom > view_bottom - grip;
+		[
+			g.free_left(idx).then_some((Grip::Left, String::new())),
+			Some((if !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
+			Some(if folded { (Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top)) } else { (Grip::Bottom, String::new()) }),
+			Some((Grip::Corner, String::new())),
+		]
+		.into_iter()
+		.flatten()
+		.collect()
 	}
 
 	/// While a drag is armed, does this preview cell render as the source's grey landing shadow, and
@@ -942,8 +980,8 @@ pub struct Frame {
 	pub shadow: bool,
 	pub tab_drop: bool,
 	pub tabs: Vec<Tab>,
-	/// The grips to render, in paint order (none on a shadow).
-	pub grips: &'static [Grip],
+	/// The grips to render, in paint order (none on a shadow), each with its inline style.
+	pub grips: Vec<(Grip, String)>,
 }
 /// One tab in a [`Frame`]'s header: its panel id (render key + `data-panel`), label, and whether
 /// it's the active tab.
@@ -980,33 +1018,28 @@ pub struct Ghost {
 	pub h: f64,
 }
 /// Where a tile is taken to resize it. `Left`/`Right` move that edge of its tile alone, pushing the
-/// tiles it grows into ([`PackedGrid::resized`]); `Bottom` sets the height; the corner is `Right`
-/// and `Bottom` at once. The edges are thin strips over the content's own; nothing is taken
-/// from it.
+/// tiles it grows into ([`PackedGrid::resized`]); `Bottom` sets the height; the corner is `Right` and
+/// `Bottom` at once. Where the right or bottom grip would reach into the view's last grip-thickness,
+/// `Wall` and `Fold` stand in for them just before it, and only shrink the tile. The edges are
+/// thin strips over the content's own; nothing is taken from it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Grip {
 	Corner,
 	Left,
 	Right,
 	Bottom,
+	Fold,
+	Wall,
 }
 impl Grip {
-	/// A tile's grips in paint order, the corner last over the edges' ends. A boundary between two
-	/// tiles is the left one's right grip alone, so a left grip exists only on a free left edge.
-	fn on(free_left: bool) -> &'static [Self] {
-		if free_left {
-			&[Self::Left, Self::Right, Self::Bottom, Self::Corner]
-		} else {
-			&[Self::Right, Self::Bottom, Self::Corner]
-		}
-	}
-
 	pub fn class(self) -> &'static str {
 		match self {
 			Self::Corner => "tl-resize-handle",
 			Self::Left => "tl-resize-left",
 			Self::Right => "tl-resize-right",
 			Self::Bottom => "tl-resize-bottom",
+			Self::Fold => "tl-resize-fold",
+			Self::Wall => "tl-resize-wall",
 		}
 	}
 
@@ -1015,6 +1048,8 @@ impl Grip {
 			Self::Corner => "nwse-resize",
 			Self::Left | Self::Right => "ew-resize",
 			Self::Bottom => "ns-resize",
+			Self::Fold => "n-resize",
+			Self::Wall => "w-resize",
 		}
 	}
 }

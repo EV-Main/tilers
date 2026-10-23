@@ -212,6 +212,10 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 				#[cfg(not(target_arch = "wasm32"))]
 				let _ = (e, api, on_band);
 			},
+			onscroll: move |_| {
+				#[cfg(target_arch = "wasm32")]
+				state.write().set_scroll(root.peek().as_ref().expect("a scroll comes from the mounted root").scroll_top() as f64);
+			},
 			onresize: move |_| {
 				#[cfg(target_arch = "wasm32")]
 				if let Some(el) = root.peek().as_ref() {
@@ -298,9 +302,10 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 							}
 							div { class: "tl-content-slot" }
 						}
-						for &grip in frame.grips {
+						for (grip, style) in frame.grips.iter().cloned() {
 							div {
 								class: grip.class(),
+								style,
 								onpointerdown: {
 									let idx = frame.idx;
 									move |e: PointerEvent| {
@@ -359,11 +364,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 					style: "position:fixed; inset:0; z-index:1000; cursor:grabbing;",
 					onpointermove: move |e: PointerEvent| {
 						let c = e.client_coordinates();
-						#[cfg(target_arch = "wasm32")]
-						let sy = scroll_y(root);
-						#[cfg(not(target_arch = "wasm32"))]
-						let sy = 0.0;
-						state.write().drag_move((c.x, c.y), sy);
+						state.write().drag_move((c.x, c.y));
 					},
 					onpointerup: move |_| state.write().drag_release(),
 					onpointercancel: move |_| state.write().drag_cancel(),
@@ -423,13 +424,6 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 }
 fn mins_of(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
 	panels.iter().map(|p| (p.id.clone(), p.min)).collect()
-}
-
-/// The root's scroll offset — the tiles live in this scrolled content space, the pointer in client
-/// space, so a drag hit-test bridges the two with it.
-#[cfg(target_arch = "wasm32")]
-fn scroll_y(root: Signal<Option<web_sys::Element>>) -> f64 {
-	root.peek().as_ref().expect("a drag starts inside the mounted root").scroll_top() as f64
 }
 
 /// Read the root's `getBoundingClientRect` origin + content box (`clientWidth/Height`, which

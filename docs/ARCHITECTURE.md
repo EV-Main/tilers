@@ -96,15 +96,17 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
 - A grip takes its own tile only. A boundary between two tiles is the left one's right grip alone,
   and moving it away leaves the right one where it is; growing pushes the tiles it reaches. A left
   grip exists only where a left edge has room beside it, never at the view's edge: a nested dock's
-  edge sits on its host's boundaries. A horizontal grip never changes a height: a tile's `y` moves
-  only by settling.
+  edge sits on its host's boundaries. For the same reason no grip runs along the view's last
+  grip-thickness and border, where a host's grip lies: a tile on the view's right edge or reaching
+  its bottom has a `Wall`/`Fold` just inside that band instead, which only shrinks it. A
+  horizontal grip never changes a height: a tile's `y` moves only by settling.
 - The content overlay's render order is **independent of layout** — never reorder it, or
   instances remount and stateful panels (maps, scroll, focus) reset.
 - `focused`/`maximized` are overlay state beside the grid, never cells; they are filtered
   through `live()` so a stale id is inert. `drag`/`resize` address cells, so anything that
   replaces them (`reset`, and hence the band latch, and `load`) must clear them too.
-- Pixel layout is the browser's job; the model is unit-free steps. Measured boxes are the
-  one re-entry of pixels.
+- Pixel layout is the browser's job; the model is unit-free steps. Measured boxes and the root's
+  scroll offset are the only re-entries of pixels.
 - Content keeps a tile's whole body below the title bar; the edge grips are strips over its edges,
   and its scrollbars stop short of the corner and leave their outer edge to the grip.
 - One gesture at a time: a drag can't start while a resize is in flight, nor a resize while a drag

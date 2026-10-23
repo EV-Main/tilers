@@ -36,6 +36,8 @@ pub struct World {
 	pub mins: HashMap<PanelId, MinSize>,
 	pub origin: (f64, f64),
 	pub size: (f64, f64),
+	/// The root's scroll offset, as the binding reports it.
+	pub scroll: f64,
 	pub cursor: (f64, f64),
 	/// The [`Band`] the latch has already resolved — what `take_band` is asserted against.
 	pub band: Option<Band>,
@@ -208,7 +210,7 @@ pub fn run(seed: u64, size: usize, verbose: bool, observe: &mut dyn FnMut(Option
 		// A resize left mid-gesture is a legitimate resting place (the user is still holding the grip),
 		// and the packed invariant is only claimed once it settles.
 		let checked = if world.state.resizing().is_some() {
-			oracle::check_in_flight(&world.state)
+			oracle::check_in_flight(&world)
 		} else {
 			world.settle();
 			oracle::check_settled(&world)
@@ -235,6 +237,7 @@ fn seed_world(frng: &mut Frng) -> World {
 		// A non-zero root origin, so a lost `- origin` in the pointer mapping can't pass unnoticed.
 		origin: (17.0, 23.0),
 		size: (0.0, 0.0),
+		scroll: 0.0,
 		cursor: (0.0, 0.0),
 		band: None,
 		measure_log: Vec::new(),

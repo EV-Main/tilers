@@ -44,12 +44,16 @@ pub const CSS: &str = r#"
 	/* opaque where a scrollbar still runs under it (no track margins outside Chromium/WebKit) */
 	background: linear-gradient(var(--tl-resize-bg, #555), var(--tl-resize-bg, #555)), var(--tl-group-bg, #1e1e1e); }
 /* The edge grips: thin strips over the content's own edges, bare until hovered. */
-.tl-resize-bottom, .tl-resize-left, .tl-resize-right { position: absolute; z-index: 100; }
+.tl-resize-bottom, .tl-resize-fold, .tl-resize-left, .tl-resize-right, .tl-resize-wall { position: absolute; z-index: 100; }
 .tl-resize-bottom { left: 0; right: 0; bottom: 0; height: calc(var(--tl-title-h, 2rem) / 8); cursor: ns-resize; }
-.tl-resize-left, .tl-resize-right { top: var(--tl-title-h, 2rem); bottom: 0; width: calc(var(--tl-title-h, 2rem) / 8); cursor: ew-resize; }
+.tl-resize-left, .tl-resize-right, .tl-resize-wall { top: var(--tl-title-h, 2rem); bottom: 0; width: calc(var(--tl-title-h, 2rem) / 8); cursor: ew-resize; }
 .tl-resize-left { left: 0; }
+/* Just before the view's last grip-thickness and 1px border, where a host dock's own grip lies when this
+   dock is nested in one of its tiles. Measured from inside the tile's 1px border. */
+.tl-resize-wall { right: calc(var(--tl-title-h, 2rem) / 8); cursor: w-resize; }
+.tl-resize-fold { left: 0; right: 0; top: calc(var(--tl-fold) - 2px - var(--tl-title-h, 2rem) / 4); height: calc(var(--tl-title-h, 2rem) / 8); cursor: n-resize; }
 .tl-resize-right { right: 0; }
-.tl-resize-bottom:hover, .tl-resize-left:hover, .tl-resize-right:hover { background: var(--tl-resize-bg, #555); }
+.tl-resize-bottom:hover, .tl-resize-fold:hover, .tl-resize-left:hover, .tl-resize-right:hover, .tl-resize-wall:hover { background: var(--tl-resize-bg, #555); }
 /* Content keeps the whole body; only its scrollbars give way: they stop short of the corner, and their
    outer edge (under the edge grip) is left bare, so the thumb is never under a grip. */
 .tl-render-overlay ::-webkit-scrollbar { width: calc(var(--tl-title-h, 2rem) / 8 + 8px); height: calc(var(--tl-title-h, 2rem) / 8 + 8px); }

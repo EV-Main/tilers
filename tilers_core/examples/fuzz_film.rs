@@ -55,7 +55,7 @@ const C_FG: &str = "#ddd";
 /// `--tl-shadow-bg` is `rgba(160,160,160,0.18)`; flattened over the tile bg so the landing cell is
 /// legible at film scale.
 const C_SHADOW: &str = "#3d3d3d";
-const BUCKETS: [&str; 31] = [
+const BUCKETS: [&str; 32] = [
 	"Measure",
 	"Place",
 	"AddTab",
@@ -87,6 +87,7 @@ const BUCKETS: [&str; 31] = [
 	"band sm",
 	"band md",
 	"band xl",
+	"Scroll",
 ];
 /// Every flag also reads a `FILM_*` variable, so the film is scriptable from an env without a
 /// second code path; clap's precedence puts the flag first.
@@ -192,6 +193,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u32 {
 			A::Key { .. } => 6,
 			A::SaveLoad => 7,
 			A::SetMins { .. } => 8,
+			A::Scroll { .. } => 31,
 		};
 	if let A::Drag { grab, commit, .. } = action {
 		m |= 1 << if world.resolved.is_empty() { 10 } else { 9 };
@@ -262,6 +264,7 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 		A::Key { inputs, aim } => format!("Key {aim:?}{}", if actions::noisy(inputs) { " [noisy]" } else { "" }),
 		A::SaveLoad => "SaveLoad".to_string(),
 		A::SetMins { panel, min } => format!("SetMins {} = {}", panel.0, min_label(min)),
+		A::Scroll { y } => format!("Scroll to {y:.0}px"),
 	}
 }
 

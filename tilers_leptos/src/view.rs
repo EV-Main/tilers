@@ -205,7 +205,15 @@ pub fn PackedArea(
 		<style>{CSS}</style>
 		// `--tl-title-h` is the stylesheet's one knob for the chrome band; the state resolves the same
 		// rem to px for the content overlay's offset.
-		<div class="tl-packed" node_ref=root style=format!("--tl-title-h: {title_h_rem}rem;")>
+		<div
+			class="tl-packed"
+			node_ref=root
+			style=format!("--tl-title-h: {title_h_rem}rem;")
+			on:scroll=move |_| {
+				let y = root.get_untracked().expect("a scroll comes from the mounted root").scroll_top() as f64;
+				state.update(|s| s.set_scroll(y));
+			}
+		>
 			// Tile skeleton — coarse re-render on any state change (no user content lives here).
 			{move || {
 				let titles = panel_titles(panels);
@@ -278,13 +286,7 @@ pub fn PackedArea(
 								on:pointermove=move |e: web_sys::PointerEvent| {
 									state
 										.update(|s| {
-											s.drag_move(
-												(e.client_x() as f64, e.client_y() as f64),
-												root
-													.get_untracked()
-													.expect("a drag starts inside the mounted root")
-													.scroll_top() as f64,
-											)
+											s.drag_move((e.client_x() as f64, e.client_y() as f64))
 										});
 								}
 								on:pointerup=move |_| state.update(|s| s.drag_release())
@@ -506,11 +508,12 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 				<div class="tl-content-slot"></div>
 			</div>
 			{frame.grips
-				.iter()
-				.map(|&grip| {
+				.into_iter()
+				.map(|(grip, style)| {
 					view! {
 						<div
 							class=grip.class()
+							style=style
 							on:pointerdown=move |e: web_sys::PointerEvent| {
 								if e.button() != 0 {
 									return;

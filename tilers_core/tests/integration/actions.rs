@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Action kinds, in the order their swarm weights are drawn.
-pub const N_KINDS: usize = 9;
+pub const N_KINDS: usize = 10;
 /// Height of the tile chrome: `Config::title_h_rem`'s default resolved against the 16px root font a
 /// non-DOM target assumes. Mirrored here only to aim at headers and to re-run the pure
 /// `resolve_target` for the coverage tally.
@@ -39,6 +39,7 @@ const RESIZE: usize = 5;
 const KEY: usize = 6;
 const SAVE_LOAD: usize = 7;
 const SET_MINS: usize = 8;
+const SCROLL: usize = 9;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -81,6 +82,11 @@ pub enum Action {
 	},
 	/// `save()` → a fresh state measured the same → `load()` → must reproduce the layout.
 	SaveLoad,
+	/// The root scrolled: where a tile shows, and so where a tile running past the view's bottom has
+	/// its fold grip.
+	Scroll {
+		y: f64,
+	},
 	/// A host re-declaring a panel's min in its panel list. The floor is unbounded by the tile's
 	/// current span, which is the case `resize` never produces.
 	SetMins {
@@ -133,8 +139,8 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 			// Only the grabbed edge moves; another tile moves only by being pushed along in front of it.
 			let edge = |c: &Cell| match grip {
 				Grip::Left => Some(c.x),
-				Grip::Right | Grip::Corner => Some(c.x + c.w),
-				Grip::Bottom => None,
+				Grip::Right | Grip::Wall | Grip::Corner => Some(c.x + c.w),
+				Grip::Bottom | Grip::Fold => None,
 			};
 			let near = |c: &Cell| if *grip == Grip::Left { c.x + c.w } else { c.x };
 			let ahead = |a: u32, b: u32| if *grip == Grip::Left { a <= b } else { a >= b };
@@ -142,14 +148,17 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 			for p in path {
 				world.cursor = *p;
 				world.state.resize_move(*p);
-				oracle::check_in_flight(&world.state)?;
+				oracle::check_in_flight(world)?;
 				let now = &world.state.grid().cells;
 				for (j, (a, b)) in press.iter().zip(now).enumerate() {
-					if matches!(grip, Grip::Left | Grip::Right) && a.h != b.h {
+					if matches!(grip, Grip::Left | Grip::Right | Grip::Wall) && a.h != b.h {
 						return Err(format!("the {grip:?} grip changed tile {j}'s height: {a:?} → {b:?}"));
 					}
-					if *grip == Grip::Bottom && (a.x, a.w) != (b.x, b.w) {
-						return Err(format!("the Bottom grip changed tile {j}'s columns: {a:?} → {b:?}"));
+					if matches!(grip, Grip::Bottom | Grip::Fold) && (a.x, a.w) != (b.x, b.w) {
+						return Err(format!("the {grip:?} grip changed tile {j}'s columns: {a:?} → {b:?}"));
+					}
+					if matches!(grip, Grip::Fold | Grip::Wall) && j == *idx && (b.w > a.w || b.h > a.h) {
+						return Err(format!("the {grip:?} grip grew its tile: {a:?} → {b:?}"));
 					}
 				}
 				if let (Some(e0), Some(e)) = (edge(g), edge(&now[*idx])) {
@@ -185,6 +194,10 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 			world.mins.insert(panel.clone(), *min);
 			world.state.set_mins(world.mins.clone());
 		}
+		Action::Scroll { y } => {
+			world.scroll = *y;
+			world.state.set_scroll(*y);
+		}
 	}
 	Ok(())
 }
@@ -193,7 +206,7 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Option<Action> {
 	let cells = &world.state.grid().cells;
 
-	let mut avail = vec![MEASURE, PLACE, KEY];
+	let mut avail = vec![MEASURE, PLACE, KEY, SCROLL];
 	if !cells.is_empty() {
 		avail.push(ADD_TAB);
 		avail.push(FOCUS);
@@ -210,7 +223,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 	let ws: Vec<u32> = avail.iter().map(|&k| weights[k].max(1)).collect();
 	let kind = avail[frng.weighted(&ws)];
 	let (sw, sh) = world.step_px();
-	let (ox, oy) = world.origin;
+	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
 
 	Some(match kind {
 		MEASURE => {
@@ -272,7 +285,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			// Only the grips a binding renders: a frame offers a left grip only on a free left edge.
 			let frames = world.state.frames(&HashMap::new());
 			let f = &frames[frng.below(frames.len() as u32) as usize];
-			let (idx, grip) = (f.idx, f.grips[frng.below(f.grips.len() as u32) as usize]);
+			let (idx, grip) = (f.idx, f.grips[frng.below(f.grips.len() as u32) as usize].0);
 			let c = &cells[idx];
 			// Where the grip sits on the tile: its corner, or the middle of the edge it is.
 			let (r, b) = (ox + (c.x + c.w) as f64 * sw, oy + (c.y + c.h) as f64 * sh);
@@ -281,7 +294,11 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 				Grip::Corner => (r, b),
 				Grip::Left => (ox + c.x as f64 * sw, mid_y),
 				Grip::Right => (r, mid_y),
+				Grip::Wall => (ox + world.size.0 - 1.0 - world.state.title_h() * 3.0 / 16.0, mid_y),
 				Grip::Bottom => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, b),
+				// Its middle, as the stylesheet places it: one grip's thickness (an eighth of the title bar)
+				// clear of the view's bottom, inside the tile's 1px border.
+				Grip::Fold => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 3.0 / 16.0),
 			};
 			let to = aim(frng, world);
 			Action::Resize {
@@ -329,6 +346,13 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			Action::Key { inputs, aim }
 		}
 		SAVE_LOAD => Action::SaveLoad,
+		SCROLL => {
+			// Anywhere the content reaches, as a browser clamps it.
+			let bottom = cells.iter().map(|c| c.y + c.h).max().unwrap_or(0) as f64 * sh;
+			Action::Scroll {
+				y: frng.below((bottom - world.size.1).max(0.0) as u32 + 1) as f64,
+			}
+		}
 		SET_MINS => {
 			let c = &cells[frng.below(cells.len() as u32) as usize];
 			Action::SetMins {
@@ -417,8 +441,8 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 	let mut armed = false;
 	for p in path {
 		world.cursor = *p;
-		world.state.drag_move(*p, 0.0);
-		oracle::check_in_flight(&world.state)?;
+		world.state.drag_move(*p);
+		oracle::check_in_flight(world)?;
 		// The ghost is the public witness of arming, so the fuzzer never has to know the threshold.
 		if world.state.ghost(&titles).is_some() {
 			armed = true;
@@ -458,7 +482,7 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 fn resolve(world: &World, source: &DragSource, grab: (f64, f64), cursor: (f64, f64)) -> DropTarget {
 	let grid = world.state.grid();
 	let (sw, sh) = world.step_px();
-	let (ox, oy) = world.origin;
+	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
 	let c = grid
 		.cells
 		.iter()
@@ -547,7 +571,7 @@ fn key(inputs: &[KeyInput], aim: Aim, world: &mut World) -> Result<(), String> {
 	if world.state.resizing().is_some() {
 		world.cursor.0 += 7.0;
 		world.state.resize_move(world.cursor);
-		oracle::check_in_flight(&world.state)?;
+		oracle::check_in_flight(world)?;
 	}
 	Ok(())
 }
@@ -565,7 +589,7 @@ fn save_load(world: &mut World) -> Result<(), String> {
 fn aim(frng: &mut Frng, world: &World) -> (f64, f64) {
 	let cells = &world.state.grid().cells;
 	let (sw, sh) = world.step_px();
-	let (ox, oy) = world.origin;
+	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
 	match frng.below(5) {
 		// A tile's body: resolves to a displace at the row below it.
 		0 if !cells.is_empty() => {
