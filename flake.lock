@@ -273,17 +273,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1782703273,
-        "narHash": "sha256-WJPfr9EAWVIuTMyb/ilHKUYlg/RNa0xrNiWR+p1iHUg=",
+        "lastModified": 1786638241,
+        "narHash": "sha256-KJhq0HYg2gIZjpsj47z1kWrjoUUAqSqdD2mMWAsOg4k=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "5106a604b3d67cffe8eb51a8bd9f04e607f0d31d",
+        "rev": "892c035d7c2ff75acd5da10424a47ab454e1f3dc",
         "type": "github"
       },
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "5106a604b3d67cffe8eb51a8bd9f04e607f0d31d",
+        "rev": "892c035d7c2ff75acd5da10424a47ab454e1f3dc",
         "type": "github"
       }
     },
@@ -314,11 +314,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1792743220,
-        "narHash": "sha256-3YWhM4QAiRe1bxN51vQRayIRCTMeYfioU2PQKgZ03Qg=",
+        "lastModified": 1792745161,
+        "narHash": "sha256-n1aPajgVWQxILdkuB55IvF/XNWt1Q3w0e0IULvL5a9U=",
         "owner": "valeratrades",
         "repo": "v_flakes",
-        "rev": "3d8457b00b9e8687ead6715ec39b0277b89bf8d0",
+        "rev": "e372c7463767f7126f3541ef46bfa75d78764804",
         "type": "github"
       },
       "original": {

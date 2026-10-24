@@ -58,16 +58,14 @@ Runnable demo: `dx serve --example insilico --package tilers_dioxus --platform w
 
 **Mins** belong to the panel: `MinSize::Px`/`Rem` size its content box, `Steps` the whole tile. Every tile is floored to the max over its tabs, re-resolved on every measure, so a px need holds however short the window gets; a want the floor overrode comes back once the floor drops. Edit a panel's `min` in `panels` to re-floor it.
 
-**Bands and the seed cache.** A container width classifies into one of three `Band`s — `sm`/`md`/`xl` — each keeping its own arrangement, because a phone doesn't want a desktop's tiling. Set `Config::storage_key` and the framework caches the layout in `localStorage` under `<key>-<band>` on `leader s`, restoring it before your code runs. `on_band` fires once per band entry — at mount, and again on every crossing — *after* that resolution:
+**Bands and the seed cache.** A container width classifies into one of three `Band`s — `sm`/`md`/`xl` — each keeping its own arrangement, because a phone doesn't want a desktop's tiling. Set `Config::storage_key` and the framework caches the layout in `localStorage` under `<key>-<band>` on `leader s s`, restoring it before your code runs. `on_band` fires once per band entry — at mount, and again on every crossing — *after* that resolution:
 
 - `api.restored()` ⇒ the cache had a layout and the grid is already populated; walk `api.tab_ids()` to rebuild your panel list from the ids it holds.
 - otherwise the grid is empty and it's yours to fill: `place` your tiles, or `load` a default you fetched yourself.
 
 A cached payload that is corrupt, from a future schema, or empty counts as a miss and says so on the console — never a silent reset. Persistence is wasm-only (a no-op natively, so every band reports a miss).
 
-**Publishing a default.** The framework never talks to a server. `leader S` caches, then hands `Config::on_publish` the band and its layout JSON, after the keydown; persist it wherever you like (behind your own authorization) to become the default fresh clients `load` in `on_band`, and say how it went with `api.notify(text)`, the dock's toast. `leader s` caches alone, and toasts on its own.
-
-**Resizing.** A grip takes its own tile only. On a boundary between two tiles it is the left tile's right grip: dragging it left shrinks that tile and leaves the right one where it is; dragging it right pushes the tiles it reaches, shrinking them down to their min. A left edge with room beside it has a grip of its own, pushing what it reaches the same way; the view's edge and a boundary have none. In a dock that is framed (its page in an iframe, or itself inside another dock's tile), a tile on the right edge of the view, or reaching or running past its bottom, has that grip just inside the edge instead, clear of the host's own; it only shrinks the tile, and the bottom one brings the tile's bottom to where you pull it. The bottom grip sets the height and pushes the stack below down; the corner is the right grip and the bottom one. A gesture is worked out from the layout at the press, so dragging back restores whatever it shrank.
+**Publishing a default.** The framework never talks to a server. `leader s p` hands `Config::on_save` a `Saved::Published { band, json }` and does nothing else; persist it wherever you like (behind your own authorization) to become the default fresh clients `load` in `on_band`. `leader s s` fires the same hook with `Saved::Cached { band }`, for feedback — the write already happened.
 
 **Scripting** — `PackedApi` arrives through `on_band`; stash it in a signal to drive the dock from elsewhere. Every method is a read/write of the one state cell:
 
@@ -76,14 +74,13 @@ let gid = api.mint_group_id();
 api.place(Group::new(gid, id), w, h);    // auto-packs left-to-right, top-to-bottom
 api.add_tab(gid, panel_id);
 api.close_active(gid);
-api.resize(idx, new_w, new_h);             // the right grip and the bottom one, at once
+api.resize(idx, new_w, new_h);
 api.reset();                               // wipe the layout back to empty
 let json = api.save(); api.load(&json)?;   // `load` errors on corrupt/future JSON
-api.notify(text);                          // the dock's toast
 api.cols(); api.band(); api.tab_ids();
 ```
 
-**Keybinds** (`Config::keymap`). The framework claims only `Keymap::root` and one leader, `Alt+z` (`Ctrl+t` on macOS); everything else waits behind the leader, where a which-key popup lists the next keys after `--tl-hint-delay` (150ms). Root holds `Ctrl+z`/`Ctrl+y`/`Ctrl+Shift+z` (`Cmd` on macOS) for undo/redo; aimed at a text field they stay the browser's text undo. Behind the leader: `u`/`U` undo/redo, `Backspace` closes the focused pane, `f` maximizes it, `d` inspects it, `?` lists the whole keymap (as does each tile's `?` button), and `s`/`S` cache/cache-and-publish the layout (unbound without `storage_key`/`on_publish`). Rebinding the leader is `Keymap { leader: Chord { key: "g", alt: true, .. }.into(), ..Default::default() }`; dropping it for flat binds is `k.root.append(&mut k.scope)`. Your own commands are `Node::Run(Command::Custom { label, run })` at any depth, `Node::Scope` nests.
+**Keybinds** (`Config::keymap`). The framework claims only `Keymap::root` and one leader, `Alt+t` (`Ctrl+t` on macOS); everything else waits behind the leader, where a which-key popup lists the next keys after `--tl-hint-delay` (150ms). Root holds `Ctrl+z`/`Ctrl+y`/`Ctrl+Shift+z` (`Cmd` on macOS) for undo/redo; aimed at a text field they stay the browser's text undo. Behind the leader: `u`/`U` undo/redo, `Backspace` closes the focused pane, `f` maximizes it, `d` inspects it, `?` lists the whole keymap (as does each tile's `?` button), and `s s`/`s p` cache/publish the layout (unbound without `storage_key`/`on_save`). Rebinding the leader is `Keymap { leader: Chord { key: "g", alt: true, .. }.into(), ..Default::default() }`; dropping it for flat binds is `k.root.append(&mut k.scope)`. Your own commands are `Node::Run(Command::Custom { label, run })` at any depth, `Node::Scope` nests.
 
 **Grid** — `Config::steps` (default 64) is the desktop column count, scaled down per band so the *physical* step stays ~constant and tiles reflow instead of shrinking; `rows` (default 36) is fixed.
 
