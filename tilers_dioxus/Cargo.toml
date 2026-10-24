@@ -1,6 +1,6 @@
 [package]
 name = "tilers_dioxus"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 description = "Dioxus binding for the tilers packed-grid tiling layout — panes split, resize, tab, float, and maximize, cached per screen band. Drives the framework-agnostic tilers_core engine."
 license = "BlueOak-1.0.0"
