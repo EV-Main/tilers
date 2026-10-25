@@ -168,6 +168,63 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 			.expect("remove blur listener");
 	});
 
+	// A frame loop for as long as a drag is live, so a pointer held at an edge keeps scrolling.
+	#[cfg(target_arch = "wasm32")]
+	let frames = use_hook(move || {
+		use std::{cell::RefCell, rc::Rc};
+
+		use wasm_bindgen::{JsCast, closure::Closure};
+		let tick: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::default();
+		let pending: Rc<RefCell<Option<i32>>> = Rc::default();
+		let request = {
+			let tick = tick.clone();
+			move || {
+				let t = tick.borrow();
+				let f = t.as_ref().expect("dropped only at unmount, which cancels the pending frame first");
+				web_sys::window()
+					.expect("a browser window")
+					.request_animation_frame(f.as_ref().unchecked_ref())
+					.expect("requestAnimationFrame never throws")
+			}
+		};
+		*tick.borrow_mut() = Some(Closure::new({
+			let (pending, request) = (pending.clone(), request.clone());
+			move || {
+				// An idle frame changes nothing, so its write's notification is dropped.
+				let (mut s, notify) = state.write_unchecked().into_parts();
+				let changed = s.autoscroll();
+				let live = s.dragging();
+				drop(s);
+				if changed {
+					drop(notify);
+				} else {
+					std::mem::forget(notify);
+				}
+				*pending.borrow_mut() = live.then(&request);
+			}
+		}));
+		Rc::new((tick, pending, request))
+	});
+	#[cfg(target_arch = "wasm32")]
+	use_effect({
+		let frames = frames.clone();
+		move || {
+			if state.read().dragging() && frames.1.borrow().is_none() {
+				*frames.1.borrow_mut() = Some((frames.2)());
+			}
+		}
+	});
+	#[cfg(target_arch = "wasm32")]
+	use_drop(move || {
+		if let Some(id) = frames.1.take() {
+			web_sys::window()
+				.expect("a browser window")
+				.cancel_animation_frame(id)
+				.expect("cancelAnimationFrame never throws");
+		}
+		frames.0.take(); // the closure holds `request`, which holds the closure
+	});
+
 	// A panel's declared min is host intent the state re-derives floors from.
 	use_effect(move || {
 		let mins = mins_of(&panels.read());
@@ -431,7 +488,9 @@ fn mins_of(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
 #[cfg(target_arch = "wasm32")]
 fn measure(el: &web_sys::Element, mut state: Signal<PackedState>, api: PackedApi, on_band: Option<Callback<PackedApi>>) {
 	let rect = el.get_bounding_client_rect();
-	state.write().set_measure((rect.x(), rect.y()), (el.client_width() as f64, el.client_height() as f64), tilers_core::framed(el));
+	state
+		.write()
+		.set_measure((rect.x(), rect.y()), (el.client_width() as f64, el.client_height() as f64), tilers_core::framed(el));
 	// The latch resolves the band's cache itself; `on_band` only fills in what it left behind — and
 	// only then lists every panel a restored layout hosts, so its floors land after.
 	if state.write().take_band().is_some() {

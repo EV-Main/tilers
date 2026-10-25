@@ -13,6 +13,9 @@ before.
   key, and `Alt+z S` caches and calls the host hook. Each says so in the dock's `.tl-notice`. Playwright gives each test a fresh context, so
   the cache starts empty without any wiping (an `addInitScript` clear would also run on `reload`
   and destroy what the test just saved).
+- `autoscroll.spec.mjs` — a drag held past the root's top (over the host chrome) or inside its
+  bottom band scrolls it with no further moves, and the drop lands in the scrolled view. Firefox is
+  `fixme`: its drag never arms (moves go to the pressed header, not the capture surface).
 - `grafana.spec.mjs` — the Grafana plugin (`tilers_grafana`) against `nix run .#dev -- grafana`
   and its testdata fixture: panels render natively in tiles, tab-joins switch panels, an inactive
   tab issues no queries, the root re-measures on a container-only resize, the cache survives a

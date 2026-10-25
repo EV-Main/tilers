@@ -126,7 +126,8 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   unknowable from the page, so reading a position as a letter assumes one (qwerty) and binds a key
   other than the one the user pressed. A layout that sends no bound key (Cyrillic, macOS Option's
   `†`) acts on nothing; a host wanting it binds those keys too.
-- The reducer is time-free; any delay (the which-key reveal) is presentation, in CSS.
+- The reducer is time-free; any delay (the which-key reveal) is presentation, in CSS; any cadence
+  (drag autoscroll) is the binding's frame loop, stepping the reducer once per frame.
 
 ## References
 

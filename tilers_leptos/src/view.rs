@@ -201,6 +201,54 @@ pub fn PackedArea(
 		});
 	}
 
+	// A frame loop for as long as a drag is live, so a pointer held at an edge keeps scrolling.
+	#[cfg(target_arch = "wasm32")]
+	{
+		use std::{cell::RefCell, rc::Rc};
+
+		use wasm_bindgen::{JsCast, closure::Closure};
+		let tick: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::default();
+		let pending: Rc<RefCell<Option<i32>>> = Rc::default();
+		let request = {
+			let tick = tick.clone();
+			move || {
+				let t = tick.borrow();
+				let f = t.as_ref().expect("dropped only at cleanup, which cancels the pending frame first");
+				web_sys::window()
+					.expect("a browser window")
+					.request_animation_frame(f.as_ref().unchecked_ref())
+					.expect("requestAnimationFrame never throws")
+			}
+		};
+		*tick.borrow_mut() = Some(Closure::new({
+			let (pending, request) = (pending.clone(), request.clone());
+			move || {
+				// An idle frame changes nothing, so it must not re-render.
+				let live = state.try_maybe_update(|s| (s.autoscroll(), s.dragging())).expect("loop cancelled with the state's owner");
+				*pending.borrow_mut() = live.then(&request);
+			}
+		}));
+		Effect::new({
+			let pending = pending.clone();
+			move |_| {
+				if state.with(|s| s.dragging()) && pending.borrow().is_none() {
+					*pending.borrow_mut() = Some(request());
+				}
+			}
+		});
+		let held = send_wrapper::SendWrapper::new((tick, pending));
+		on_cleanup(move || {
+			let (tick, pending) = held.take();
+			if let Some(id) = pending.take() {
+				web_sys::window()
+					.expect("a browser window")
+					.cancel_animation_frame(id)
+					.expect("cancelAnimationFrame never throws");
+			}
+			tick.take(); // the closure holds `request`, which holds the closure
+		});
+	}
+
 	view! {
 		<style>{CSS}</style>
 		// `--tl-title-h` is the stylesheet's one knob for the chrome band; the state resolves the same
@@ -210,7 +258,8 @@ pub fn PackedArea(
 			node_ref=root
 			style=format!("--tl-title-h: {title_h_rem}rem;")
 			on:scroll=move |_| {
-				let y = root.get_untracked().expect("a scroll comes from the mounted root").scroll_top() as f64;
+				let y = root.get_untracked().expect("a scroll comes from the mounted root").scroll_top()
+					as f64;
 				state.update(|s| s.set_scroll(y));
 			}
 		>
@@ -284,10 +333,7 @@ pub fn PackedArea(
 							<div
 								style="position:fixed; inset:0; z-index:1000; cursor:grabbing;"
 								on:pointermove=move |e: web_sys::PointerEvent| {
-									state
-										.update(|s| {
-											s.drag_move((e.client_x() as f64, e.client_y() as f64))
-										});
+									state.update(|s| { s.drag_move((e.client_x() as f64, e.client_y() as f64)) });
 								}
 								on:pointerup=move |_| state.update(|s| s.drag_release())
 								on:pointercancel=move |_| state.update(|s| s.drag_cancel())
@@ -298,10 +344,12 @@ pub fn PackedArea(
 
 			// Cursor-only scrim while resizing.
 			{move || {
-				state.with(|s| s.resizing()).map(|grip| {
-					let style = format!("position:fixed; inset:0; z-index:1000; cursor:{};", grip.cursor());
-					view! { <div style=style></div> }
-				})
+				state
+					.with(|s| s.resizing())
+					.map(|grip| {
+						let style = format!("position:fixed; inset:0; z-index:1000; cursor:{};", grip.cursor());
+						view! { <div style=style></div> }
+					})
 			}}
 
 			// Floating drag ghost.
@@ -327,9 +375,11 @@ pub fn PackedArea(
 										.into_iter()
 										.map(|t| {
 											view! {
-												<div class=if t.active { "tl-tab tl-active" } else { "tl-tab" }>
-													{t.title}
-												</div>
+												<div class=if t.active {
+													"tl-tab tl-active"
+												} else {
+													"tl-tab"
+												}>{t.title}</div>
 											}
 										})
 										.collect_view()}
@@ -507,7 +557,8 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 				</div>
 				<div class="tl-content-slot"></div>
 			</div>
-			{frame.grips
+			{frame
+				.grips
 				.into_iter()
 				.map(|(grip, style)| {
 					view! {
@@ -520,7 +571,8 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 								}
 								e.stop_propagation();
 								capture_pointer(&e);
-								state.update(|s| s.resize_start(idx, grip, e.client_x() as f64, e.client_y() as f64));
+								state
+									.update(|s| s.resize_start(idx, grip, e.client_x() as f64, e.client_y() as f64));
 							}
 							on:pointermove=move |e: web_sys::PointerEvent| {
 								state.update(|s| s.resize_move((e.client_x() as f64, e.client_y() as f64)));

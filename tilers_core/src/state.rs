@@ -30,6 +30,9 @@ use crate::{
 const REM_PX: f64 = 16.0;
 /// A press promotes to a drag only past this many px, so a click still activates a tab.
 const DRAG_THRESHOLD: f64 = 4.0;
+/// Px per frame a held drag scrolls at past a scroller's edge; its edge band ramps up to it.
+#[cfg(target_arch = "wasm32")]
+const MAX_AUTOSCROLL: f64 = 20.0;
 
 /// Everything the packed layout needs to render and mutate itself, on one struct. The engine's
 /// grid plus the live view geometry (`cols`/`step_px`/`breakpoint`/`root_*`, set by the measure),
@@ -347,6 +350,9 @@ impl PackedState {
 
 	pub fn set_scroll(&mut self, y: f64) {
 		self.scroll = y;
+		if let Some(c) = self.drag.as_ref().map(|d| d.cursor) {
+			self.drag_move(c); // the cursor now sits over other content
+		}
 	}
 
 	/// Whether [`capture_undo`](Self::capture_undo) would actually push. A binding that captures via
@@ -526,6 +532,68 @@ impl PackedState {
 
 	pub fn drag_cancel(&mut self) {
 		self.drag = None;
+	}
+
+	/// One frame of a held drag: the innermost scroller (the root, its scrolling ancestors, then the
+	/// page) that can still move toward the cursor's edge band, or past its edge, takes a step. Then
+	/// the root's origin and scroll are re-read, since any ancestor's scroll moves them; `true` when
+	/// they moved, and the target was re-resolved under the cursor.
+	#[cfg(target_arch = "wasm32")]
+	pub fn autoscroll(&mut self) -> bool {
+		let Some(y) = self.drag.as_ref().filter(|d| d.armed).map(|d| d.cursor.1) else { return false };
+		let root = self.root.clone().expect("binding sets the root at mount, before any drag");
+		let window = web_sys::window().expect("a browser window");
+		let page = window.document().expect("a document").scrolling_element().expect("a standards-mode document has one");
+		let vh = window.inner_height().expect("innerHeight never throws").as_f64().expect("innerHeight is a number");
+		let band = self.step_px.1;
+		let ramp = |depth: f64| {
+			if depth <= 0.0 {
+				MAX_AUTOSCROLL
+			} else {
+				MAX_AUTOSCROLL * ((band - depth).max(0.0) / band).powi(2)
+			}
+		};
+		// The page scrolls unless the host turned it off; anything else only where it shows a scrollbar.
+		let scrolls = |e: &web_sys::Element| {
+			let style = window.get_computed_style(e).expect("an element in the document").expect("an element has a computed style");
+			let o = style.get_property_value("overflow-y").expect("reading a longhand never throws");
+			if *e == page {
+				!matches!(o.as_str(), "hidden" | "clip")
+			} else {
+				matches!(o.as_str(), "auto" | "scroll" | "overlay")
+			}
+		};
+		let chain = std::iter::successors(Some(root.clone()), |e| e.parent_element())
+			.filter(|e| *e != page)
+			.chain(std::iter::once(page.clone()))
+			.filter(scrolls);
+		for e in chain {
+			let (top, bottom) = if e == page {
+				(0.0, vh)
+			} else {
+				let top = e.get_bounding_client_rect().top() + e.client_top() as f64;
+				(top.max(0.0), (top + e.client_height() as f64).min(vh))
+			};
+			let (up, down) = (ramp(y - top), ramp(bottom - y));
+			let max = e.scroll_height() - e.client_height();
+			let step = if up >= down && up > 0.0 && e.scroll_top() > 0 {
+				-up.ceil()
+			} else if down > 0.0 && e.scroll_top() < max {
+				down.ceil()
+			} else {
+				continue;
+			};
+			e.set_scroll_top(e.scroll_top() + step as i32);
+			break;
+		}
+		let r = root.get_bounding_client_rect();
+		let (origin, scroll) = ((r.x(), r.y()), root.scroll_top() as f64);
+		if origin == self.root_origin && scroll == self.scroll {
+			return false;
+		}
+		self.root_origin = origin;
+		self.set_scroll(scroll);
+		true
 	}
 
 	/// Begin a resize of tile `idx` from `grip` at the pointer `(px, py)`.
@@ -825,7 +893,11 @@ impl PackedState {
 		[
 			g.free_left(idx).then_some((Grip::Left, String::new())),
 			Some((if self.framed && !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
-			Some(if folded { (Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top)) } else { (Grip::Bottom, String::new()) }),
+			Some(if folded {
+				(Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top))
+			} else {
+				(Grip::Bottom, String::new())
+			}),
 			Some((Grip::Corner, String::new())),
 		]
 		.into_iter()
@@ -1065,8 +1137,7 @@ impl Grip {
 #[cfg(target_arch = "wasm32")]
 pub fn framed(root: &web_sys::Element) -> bool {
 	let win = web_sys::window().expect("a mounted root has a window");
-	!matches!(win.frame_element(), Ok(None))
-		|| root.parent_element().is_some_and(|p| p.closest(".tl-tile").expect("a constant, valid selector").is_some())
+	!matches!(win.frame_element(), Ok(None)) || root.parent_element().is_some_and(|p| p.closest(".tl-tile").expect("a constant, valid selector").is_some())
 }
 
 /// A cached layout that couldn't be used. Loud on purpose: a seed cache that silently wipes itself
