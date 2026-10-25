@@ -18,13 +18,13 @@ test('pulling a resize grip past the bottom edge keeps stretching the tile', asy
 	const root = page.locator('.tl-packed')
 	const before = await root.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
 
-	// The grip lowest on screen belongs to the tile whose bottom is nearest the fold.
+	// The lowest grip still on screen; a taller layout puts others below the fold, where a press hits nothing.
 	const grips = await page.locator('.tl-resize-handle').all()
 	let grip = null
 	let gripBox = null
 	for (const g of grips) {
 		const b = await g.boundingBox()
-		if (b && (!gripBox || b.y > gripBox.y)) {
+		if (b && b.y + b.height <= page.viewportSize().height && (!gripBox || b.y > gripBox.y)) {
 			grip = g
 			gripBox = b
 		}
