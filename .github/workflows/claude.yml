@@ -1,15 +1,6 @@
-%YAML 1.1
----
 jobs:
   claude:
-    if: (github.event_name == 'issue_comment' && 
-      contains(github.event.comment.body, '@claude')) || (github.event_name == 
-      'pull_request_review_comment' && contains(github.event.comment.body, 
-      '@claude')) || (github.event_name == 'pull_request_review' && 
-      contains(github.event.review.body, '@claude')) || (github.event_name == 
-      'issues' && (contains(github.event.issue.body, '@claude') || 
-      contains(github.event.issue.title, '@claude') || github.event.label.name 
-      == 'ext:claude'))
+    if: (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) || (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) || (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude') || github.event.label.name == 'ext:claude'))
     permissions:
       actions: read
       contents: read
@@ -18,47 +9,44 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     steps:
-    - env:
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      name: Ensure CLAUDE_CODE_OAUTH_TOKEN secret is configured
-      run: "if [ -z \"${CLAUDE_CODE_OAUTH_TOKEN}\" ]; then\n  echo \"::error::Secret
-        'CLAUDE_CODE_OAUTH_TOKEN' is not set (empty in this job).\"\n  if [ \"${{
-        github.event.repository.private }}\" = \"true\" ]; then\n    echo \"::error::This
-        repo is PRIVATE. On GitHub Free-plan orgs, organization secrets are NOT exposed
-        to private repos — if 'CLAUDE_CODE_OAUTH_TOKEN' is set org-wide it still won't
-        reach here. Fix: set it repo-level (gh secret set CLAUDE_CODE_OAUTH_TOKEN
-        -R ${{ github.repository }}), or upgrade the org to Team/Enterprise.\"\n \
-        \ else\n    echo \"::error::Add it under Settings → Secrets and variables
-        → Actions (repo-level, or org-level with 'All repositories' visibility — org
-        secrets reach public repos on any plan).\"\n  fi\n  exit 1\nfi\n"
-    - name: Checkout repository
-      uses: actions/checkout@v5
-      with:
-        fetch-depth: 1
-    - id: claude
-      name: Run Claude Code
-      uses: anthropics/claude-code-action@v1
-      with:
-        additional_permissions: "actions: read\n"
-        claude_args: --permission-mode bypassPermissions --append-system-prompt 
-          "Whenever you push commits to a branch, always finish by opening a 
-          pull request against the default branch with gh pr create (check gh pr
-          list --head <branch> first; if one already exists, pushing was 
-          enough)."
-        claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        label_trigger: ext:claude
+      - env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        name: Ensure CLAUDE_CODE_OAUTH_TOKEN secret is configured
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "::error::Secret 'CLAUDE_CODE_OAUTH_TOKEN' is not set (empty in this job)."
+            if [ "${{ github.event.repository.private }}" = "true" ]; then
+              echo "::error::This repo is PRIVATE. On GitHub Free-plan orgs, organization secrets are NOT exposed to private repos — if 'CLAUDE_CODE_OAUTH_TOKEN' is set org-wide it still won't reach here. Fix: set it repo-level (gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${{ github.repository }}), or upgrade the org to Team/Enterprise."
+            else
+              echo "::error::Add it under Settings → Secrets and variables → Actions (repo-level, or org-level with 'All repositories' visibility — org secrets reach public repos on any plan)."
+            fi
+            exit 1
+          fi
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - id: claude
+        name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          additional_permissions: |
+            actions: read
+          claude_args: --permission-mode bypassPermissions --append-system-prompt "Whenever you push commits to a branch, always finish by opening a pull request against the default branch with gh pr create (check gh pr list --head <branch> first; if one already exists, pushing was enough)."
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          label_trigger: ext:claude
 name: Claude Code
-'on':
+on:
   issue_comment:
     types:
-    - created
+      - created
   issues:
     types:
-    - opened
-    - labeled
+      - opened
+      - labeled
   pull_request_review:
     types:
-    - submitted
+      - submitted
   pull_request_review_comment:
     types:
-    - created
+      - created

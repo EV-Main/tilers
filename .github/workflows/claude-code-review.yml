@@ -1,9 +1,6 @@
-%YAML 1.1
----
 jobs:
   claude-review:
-    if: github.event.repository.owner.type == 'User' || 
-      github.event.repository.custom_properties.pr_auto_review == 'true'
+    if: github.event.repository.owner.type == 'User' || github.event.repository.custom_properties.pr_auto_review == 'true'
     permissions:
       contents: read
       id-token: write
@@ -11,40 +8,39 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     steps:
-    - env:
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      name: Ensure CLAUDE_CODE_OAUTH_TOKEN secret is configured
-      run: "if [ -z \"${CLAUDE_CODE_OAUTH_TOKEN}\" ]; then\n  echo \"::error::Secret
-        'CLAUDE_CODE_OAUTH_TOKEN' is not set (empty in this job).\"\n  if [ \"${{
-        github.event.repository.private }}\" = \"true\" ]; then\n    echo \"::error::This
-        repo is PRIVATE. On GitHub Free-plan orgs, organization secrets are NOT exposed
-        to private repos — if 'CLAUDE_CODE_OAUTH_TOKEN' is set org-wide it still won't
-        reach here. Fix: set it repo-level (gh secret set CLAUDE_CODE_OAUTH_TOKEN
-        -R ${{ github.repository }}), or upgrade the org to Team/Enterprise.\"\n \
-        \ else\n    echo \"::error::Add it under Settings → Secrets and variables
-        → Actions (repo-level, or org-level with 'All repositories' visibility — org
-        secrets reach public repos on any plan).\"\n  fi\n  exit 1\nfi\n"
-    - name: Checkout repository
-      uses: actions/checkout@v5
-      with:
-        fetch-depth: 1
-    - id: claude-review
-      name: Run Claude Code Review
-      uses: anthropics/claude-code-action@v1
-      with:
-        claude_args: --permission-mode bypassPermissions
-        claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        plugin_marketplaces: https://github.com/anthropics/claude-code.git
-        plugins: code-review@claude-code-plugins
-        prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number
-          }} --comment\nWhen no issues are found, instead of the boilerplate no-issues
-          body, post a short summary: what was checked (areas of the diff, classes
-          of issues looked for) and why the changes are acceptable."
+      - env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        name: Ensure CLAUDE_CODE_OAUTH_TOKEN secret is configured
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "::error::Secret 'CLAUDE_CODE_OAUTH_TOKEN' is not set (empty in this job)."
+            if [ "${{ github.event.repository.private }}" = "true" ]; then
+              echo "::error::This repo is PRIVATE. On GitHub Free-plan orgs, organization secrets are NOT exposed to private repos — if 'CLAUDE_CODE_OAUTH_TOKEN' is set org-wide it still won't reach here. Fix: set it repo-level (gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${{ github.repository }}), or upgrade the org to Team/Enterprise."
+            else
+              echo "::error::Add it under Settings → Secrets and variables → Actions (repo-level, or org-level with 'All repositories' visibility — org secrets reach public repos on any plan)."
+            fi
+            exit 1
+          fi
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - id: claude-review
+        name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_args: --permission-mode bypassPermissions
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: https://github.com/anthropics/claude-code.git
+          plugins: code-review@claude-code-plugins
+          prompt: |-
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
+            When no issues are found, instead of the boilerplate no-issues body, post a short summary: what was checked (areas of the diff, classes of issues looked for) and why the changes are acceptable.
 name: Claude Code Review
-'on':
+on:
   pull_request:
     types:
-    - opened
-    - synchronize
-    - ready_for_review
-    - reopened
+      - opened
+      - synchronize
+      - ready_for_review
+      - reopened

@@ -1,10 +1,8 @@
-%YAML 1.1
----
 env:
-  CARGO_INCREMENTAL: '0'
-  CARGO_NET_RETRY: '10'
-  RUSTC_WRAPPER: ''
-  RUSTUP_MAX_RETRIES: '10'
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  RUSTC_WRAPPER: ""
+  RUSTUP_MAX_RETRIES: "10"
   RUST_BACKTRACE: short
 jobs:
   code-duplication:
@@ -12,24 +10,23 @@ jobs:
     needs: pre_ci
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: actions/checkout@v5
-      with:
-        path: my_gh_stuff
-        repository: valeratrades/v_flakes
-        sparse-checkout: github/workflows
-        sparse-checkout-cone-mode: false
-    - name: Setup nightly Rust
-      uses: dtolnay/rust-toolchain@nightly
-    - name: Install mold linker
-      run: sudo apt-get install -y mold
-    - name: Install qlty
-      uses: qltysh/qlty-action/install@main
-    - name: Initialize qlty
-      run: qlty init --no --no-upgrade-check
-    - name: Check for code duplication
-      run: cargo +nightly -Zscript -q 
-        my_gh_stuff/github/workflows/code-duplication.rs
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          path: my_gh_stuff
+          repository: valeratrades/v_flakes
+          sparse-checkout: github/workflows
+          sparse-checkout-cone-mode: false
+      - name: Setup nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install mold linker
+        run: sudo apt-get install -y mold
+      - name: Install qlty
+        uses: qltysh/qlty-action/install@main
+      - name: Initialize qlty
+        run: qlty init --no --no-upgrade-check
+      - name: Check for code duplication
+        run: cargo +nightly -Zscript -q my_gh_stuff/github/workflows/code-duplication.rs
     timeout-minutes: 15
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@main
@@ -38,15 +35,14 @@ jobs:
     needs: pre_ci
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: dtolnay/rust-toolchain@clippy
-    - name: Download modified by pre-ci Cargo.toml files
-      uses: actions/download-artifact@v7
-      with:
-        name: modified-cargo-files
-    - run: rm -f "$GITHUB_WORKSPACE/.cargo/config.toml" 
-        "$GITHUB_WORKSPACE/.cargo/config"
-    - run: cargo clippy --workspace --all-targets -- -Dwarnings
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@clippy
+      - name: Download modified by pre-ci Cargo.toml files
+        uses: actions/download-artifact@v7
+        with:
+          name: modified-cargo-files
+      - run: rm -f "$GITHUB_WORKSPACE/.cargo/config.toml" "$GITHUB_WORKSPACE/.cargo/config"
+      - run: cargo clippy --workspace --all-targets -- -Dwarnings
     timeout-minutes: 45
   rust-doc:
     env:
@@ -56,78 +52,78 @@ jobs:
     needs: pre_ci
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: dtolnay/rust-toolchain@nightly
-    - name: Download modified by pre-ci Cargo.toml files
-      uses: actions/download-artifact@v7
-      with:
-        name: modified-cargo-files
-    - uses: dtolnay/install@cargo-docs-rs
-    - run: rm -f "$GITHUB_WORKSPACE/.cargo/config.toml" 
-        "$GITHUB_WORKSPACE/.cargo/config"
-    - run: "for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[]
-        | select([.targets[].kind[]] | any(. == \"lib\" or . == \"proc-macro\")) |
-        .name'); do\n  cargo docs-rs -p \"$p\"\ndone\n"
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Download modified by pre-ci Cargo.toml files
+        uses: actions/download-artifact@v7
+        with:
+          name: modified-cargo-files
+      - uses: dtolnay/install@cargo-docs-rs
+      - run: rm -f "$GITHUB_WORKSPACE/.cargo/config.toml" "$GITHUB_WORKSPACE/.cargo/config"
+      - run: |
+          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select([.targets[].kind[]] | any(. == "lib" or . == "proc-macro")) | .name'); do
+            cargo docs-rs -p "$p"
+          done
     timeout-minutes: 45
   rust-machete:
     name: Unused Dependencies
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: cachix/install-nix-action@v31
-    - name: Cargo Machete
-      run: "\t\t\t\tnix run github:valeratrades/v_flakes#cargo-machete\n\t\t\t\texit_code=$?\n\
-        \t\t\t\tif [ $exit_code != 0 ]; then\n\t\t\t\t\techo \"Found unused dependencies\"\
-        \n\t\t\t\t\texit $exit_code\n\t\t\t\tfi\n\t\t\t"
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Cargo Machete
+        run: "\t\t\t\tnix run github:valeratrades/v_flakes#cargo-machete\n\t\t\t\texit_code=$?\n\t\t\t\tif [ $exit_code != 0 ]; then\n\t\t\t\t\techo \"Found unused dependencies\"\n\t\t\t\t\texit $exit_code\n\t\t\t\tfi\n\t\t\t"
   rust-sorted:
     name: Cargo Sorted
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - name: Installation
-      uses: taiki-e/install-action@v2
-      with:
-        tool: cargo-sort
-    - name: Check if Cargo.toml is sorted
-      run: "cargo sort --workspace --grouped --check\nexit_code=$?\nif [ $exit_code
-        != 0 ]; then\n  echo 'Cargo.toml is not sorted. Run `cargo sort -w` to fix
-        it.'\n  exit $exit_code\nfi\n"
+      - uses: actions/checkout@v5
+      - name: Installation
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort
+      - name: Check if Cargo.toml is sorted
+        run: |
+          cargo sort --workspace --grouped --check
+          exit_code=$?
+          if [ $exit_code != 0 ]; then
+            echo 'Cargo.toml is not sorted. Run `cargo sort -w` to fix it.'
+            exit $exit_code
+          fi
   rust-sorted-derives:
     name: Sorted Derives
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: cachix/install-nix-action@v31
-    - name: Assert derives are sorted
-      run: "# `sort-derives` is argv[1] here: the binary is a cargo subcommand, and
-        `nix run` invokes\n# it directly rather than through `cargo`, so nothing else
-        supplies that word.\nnix run github:valeratrades/v_flakes#cargo-sort-derives
-        -- sort-derives --check\nexit_code=$?\nif [ $exit_code != 0 ]; then\n  echo
-        'Derives are not sorted. Run `cargo sort-derives` to fix it.'\n  exit $exit_code\n\
-        fi\n"
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Assert derives are sorted
+        run: |
+          # `sort-derives` is argv[1] here: the binary is a cargo subcommand, and `nix run` invokes
+          # it directly rather than through `cargo`, so nothing else supplies that word.
+          nix run github:valeratrades/v_flakes#cargo-sort-derives -- sort-derives --check
+          exit_code=$?
+          if [ $exit_code != 0 ]; then
+            echo 'Derives are not sorted. Run `cargo sort-derives` to fix it.'
+            exit $exit_code
+          fi
   tokei:
     name: Reasonable Amount of Comments
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v5
-    - name: Installation
-      uses: taiki-e/install-action@v2
-      with:
-        tool: tokei
-    - name: Generate Tokei output
-      run: tokei -o json > tokei_output.json
-    - name: Install jq
-      run: sudo apt-get install -y jq
-    - name: Check Rust comments
-      run: "\t\t\t\tcomments=$(jq '.Rust.comments' tokei_output.json)\n\t\t\t\tcode=$(jq
-        '.Rust.code' tokei_output.json)\n\n\t\t\t\t# compare: comments > code * 0.15\n\
-        \t\t\t\tif [ $((comments * 100)) -ge $((code * 15)) ]; then\n\t\t\t\t\t\t\
-        echo \"Number of comments should be less than 15% of code\"\n\t\t\t\t\t\t\
-        exit 1\n\t\t\t\telse\n\t\t\t\t\t\techo \"Check passed: Number of comments
-        is less than 15% of code\"\n\t\t\t\tfi\n        \t\t\t"
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Installation
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tokei
+      - name: Generate Tokei output
+        run: tokei -o json > tokei_output.json
+      - name: Install jq
+        run: sudo apt-get install -y jq
+      - name: Check Rust comments
+        run: "\t\t\t\tcomments=$(jq '.Rust.comments' tokei_output.json)\n\t\t\t\tcode=$(jq '.Rust.code' tokei_output.json)\n\n\t\t\t\t# compare: comments > code * 0.15\n\t\t\t\tif [ $((comments * 100)) -ge $((code * 15)) ]; then\n\t\t\t\t\t\techo \"Number of comments should be less than 15% of code\"\n\t\t\t\t\t\texit 1\n\t\t\t\telse\n\t\t\t\t\t\techo \"Check passed: Number of comments is less than 15% of code\"\n\t\t\t\tfi\n        \t\t\t"
 name: Warnings
-'on':
+on:
   push: {}
   workflow_dispatch: {}
 permissions:

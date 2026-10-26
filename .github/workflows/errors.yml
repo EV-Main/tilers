@@ -1,10 +1,8 @@
-%YAML 1.1
----
 env:
-  CARGO_INCREMENTAL: '0'
-  CARGO_NET_RETRY: '10'
-  RUSTC_WRAPPER: ''
-  RUSTUP_MAX_RETRIES: '10'
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "10"
+  RUSTC_WRAPPER: ""
+  RUSTUP_MAX_RETRIES: "10"
   RUST_BACKTRACE: short
 jobs:
   pre_ci:
@@ -15,36 +13,37 @@ jobs:
     needs: pre_ci
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: ${{matrix.rust}}
-    - name: Install mold
-      uses: rui314/setup-mold@v1
-    - if: github.ref == 'refs/heads/release'
-      name: Set RUSTFLAGS for release branch
-      run: echo "RUSTFLAGS=-Dwarnings" >> $GITHUB_ENV
-    - if: matrix.rust == 'nightly'
-      name: Enable type layout randomization
-      run: "printf '#!/bin/sh\\nexec \"$@\" -Zrandomize-layout --cfg=exhaustive\\\
-        n' > /tmp/randomize-layout.sh\nchmod +x /tmp/randomize-layout.sh\necho RUSTC_WORKSPACE_WRAPPER=/tmp/randomize-layout.sh
-        >> $GITHUB_ENV\n"
-    - name: Download modified by pre-ci Cargo.toml files
-      uses: actions/download-artifact@v7
-      with:
-        name: modified-cargo-files
-    - run: cargo update
-    - run: cargo check --workspace --all-targets
-    - run: cargo test --workspace
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{matrix.rust}}
+      - name: Install mold
+        uses: rui314/setup-mold@v1
+      - if: github.ref == 'refs/heads/release'
+        name: Set RUSTFLAGS for release branch
+        run: echo "RUSTFLAGS=-Dwarnings" >> $GITHUB_ENV
+      - if: matrix.rust == 'nightly'
+        name: Enable type layout randomization
+        run: |
+          printf '#!/bin/sh\nexec "$@" -Zrandomize-layout --cfg=exhaustive\n' > /tmp/randomize-layout.sh
+          chmod +x /tmp/randomize-layout.sh
+          echo RUSTC_WORKSPACE_WRAPPER=/tmp/randomize-layout.sh >> $GITHUB_ENV
+      - name: Download modified by pre-ci Cargo.toml files
+        uses: actions/download-artifact@v7
+        with:
+          name: modified-cargo-files
+      - run: cargo update
+      - run: cargo check --workspace --all-targets
+      - run: cargo test --workspace
     strategy:
       fail-fast: false
       matrix:
         rust:
-        - nightly
-        - nightly-2026-06-18
+          - nightly
+          - nightly-2026-06-18
     timeout-minutes: 45
 name: Errors
-'on':
+on:
   push: {}
   workflow_dispatch: {}
 permissions:

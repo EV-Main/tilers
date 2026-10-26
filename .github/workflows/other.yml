@@ -1,105 +1,116 @@
-%YAML 1.1
----
 jobs:
   asset-gate:
     env:
-      RUSTC_WRAPPER: ''
+      RUSTC_WRAPPER: ""
     name: Asset gate
     needs: pre_ci
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v5
-    - name: Download modified by pre-ci Cargo.toml files
-      uses: actions/download-artifact@v7
-      with:
-        name: modified-cargo-files
-    - id: bucket
-      name: Interval bucket
-      run: echo "key=asset-gate-docs--readme_assets-assets-fuzz-svg-$(( $(date 
-        -u +%s) / 86400 ))" >> $GITHUB_OUTPUT
-    - id: guard
-      name: Has this interval been checked
-      uses: actions/cache/restore@v5
-      with:
-        key: ${{ steps.bucket.outputs.key }}
-        path: .asset-gate-stamp
-    - if: steps.guard.outputs.cache-hit != 'true'
-      name: Lean cache setup
-      run: "mkdir -p /tmp/nix-lean-cache\nchmod 0777 /tmp/nix-lean-cache\nprintf '#!/bin/sh\\
-        nexport PATH=/nix/var/nix/profiles/default/bin:$PATH\\nnix copy --to \"file:///tmp/nix-lean-cache?compression=zstd&parallel-compression=true\"\
-        \ $OUT_PATHS || true\\n' > /tmp/nix-lean-pbh.sh\nchmod 0755 /tmp/nix-lean-pbh.sh\n"
-      shell: bash
-    - if: steps.guard.outputs.cache-hit != 'true'
-      name: Install Nix
-      uses: DeterminateSystems/nix-installer-action@main
-      with:
-        extra-conf: "lazy-trees = true\npost-build-hook = /tmp/nix-lean-pbh.sh\nextra-substituters
-          = file:///tmp/nix-lean-cache\nextra-trusted-substituters = file:///tmp/nix-lean-cache\n\
-          require-sigs = false\n"
-    - if: steps.guard.outputs.cache-hit != 'true'
-      name: Lean nix cache (built-only paths)
-      uses: actions/cache@v5
-      with:
-        key: nix-lean-${{ runner.os }}-${{ github.run_id }}
-        path: /tmp/nix-lean-cache
-        restore-keys: nix-lean-${{ runner.os }}-
-    - if: steps.guard.outputs.cache-hit != 'true'
-      name: Regenerate docs/.readme_assets/assets/fuzz.svg and compare
-      run: "export ASSET_OUT=\"$(mktemp -d)/$(basename docs/.readme_assets/assets/fuzz.svg)\"\
-        \nnix run .#film\nif ! cmp -s docs/.readme_assets/assets/fuzz.svg \"$ASSET_OUT\"\
-        ; then\n  echo \"::error file=docs/.readme_assets/assets/fuzz.svg::docs/.readme_assets/assets/fuzz.svg
-        no longer matches its generator — regenerate and commit it: nix run .#film\"\
-        \n  exit 1\nfi\necho \"docs/.readme_assets/assets/fuzz.svg is current\"\n\
-        : > .asset-gate-stamp\n"
-    - if: steps.guard.outputs.cache-hit != 'true'
-      name: Record this interval as checked
-      uses: actions/cache/save@v5
-      with:
-        key: ${{ steps.bucket.outputs.key }}
-        path: .asset-gate-stamp
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Download modified by pre-ci Cargo.toml files
+        uses: actions/download-artifact@v7
+        with:
+          name: modified-cargo-files
+      - id: bucket
+        name: Interval bucket
+        run: echo "key=asset-gate-docs--readme_assets-assets-fuzz-svg-$(( $(date -u +%s) / 86400 ))" >> $GITHUB_OUTPUT
+      - id: guard
+        name: Has this interval been checked
+        uses: actions/cache/restore@v5
+        with:
+          key: ${{ steps.bucket.outputs.key }}
+          path: .asset-gate-stamp
+      - if: steps.guard.outputs.cache-hit != 'true'
+        name: Lean cache setup
+        run: |
+          mkdir -p /tmp/nix-lean-cache
+          chmod 0777 /tmp/nix-lean-cache
+          printf '#!/bin/sh\nexport PATH=/nix/var/nix/profiles/default/bin:$PATH\nnix copy --to "file:///tmp/nix-lean-cache?compression=zstd&parallel-compression=true" $OUT_PATHS || true\n' > /tmp/nix-lean-pbh.sh
+          chmod 0755 /tmp/nix-lean-pbh.sh
+        shell: bash
+      - if: steps.guard.outputs.cache-hit != 'true'
+        name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            lazy-trees = true
+            post-build-hook = /tmp/nix-lean-pbh.sh
+            extra-substituters = file:///tmp/nix-lean-cache
+            extra-trusted-substituters = file:///tmp/nix-lean-cache
+            require-sigs = false
+      - if: steps.guard.outputs.cache-hit != 'true'
+        name: Lean nix cache (built-only paths)
+        uses: actions/cache@v5
+        with:
+          key: nix-lean-${{ runner.os }}-${{ github.run_id }}
+          path: /tmp/nix-lean-cache
+          restore-keys: nix-lean-${{ runner.os }}-
+      - if: steps.guard.outputs.cache-hit != 'true'
+        name: Regenerate docs/.readme_assets/assets/fuzz.svg and compare
+        run: |
+          export ASSET_OUT="$(mktemp -d)/$(basename docs/.readme_assets/assets/fuzz.svg)"
+          nix run .#film
+          if ! cmp -s docs/.readme_assets/assets/fuzz.svg "$ASSET_OUT"; then
+            echo "::error file=docs/.readme_assets/assets/fuzz.svg::docs/.readme_assets/assets/fuzz.svg no longer matches its generator — regenerate and commit it: nix run .#film"
+            exit 1
+          fi
+          echo "docs/.readme_assets/assets/fuzz.svg is current"
+          : > .asset-gate-stamp
+      - if: steps.guard.outputs.cache-hit != 'true'
+        name: Record this interval as checked
+        uses: actions/cache/save@v5
+        with:
+          key: ${{ steps.bucket.outputs.key }}
+          path: .asset-gate-stamp
   loc-badge:
     name: Update LOC Badge
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v5
-    - env:
-        loc_gist_token: ${{ secrets.loc_gist_token }}
-      name: Ensure loc_gist_token secret is configured
-      run: "if [ -z \"${loc_gist_token}\" ]; then\n  echo \"::error::Secret 'loc_gist_token'
-        is not set (empty in this job).\"\n  if [ \"${{ github.event.repository.private
-        }}\" = \"true\" ]; then\n    echo \"::error::This repo is PRIVATE. On GitHub
-        Free-plan orgs, organization secrets are NOT exposed to private repos — if
-        'loc_gist_token' is set org-wide it still won't reach here. Fix: set it repo-level
-        (gh secret set loc_gist_token -R ${{ github.repository }}), or upgrade the
-        org to Team/Enterprise.\"\n  else\n    echo \"::error::Add it under Settings
-        → Secrets and variables → Actions (repo-level, or org-level with 'All repositories'
-        visibility — org secrets reach public repos on any plan).\"\n  fi\n  echo
-        \"::error::Create a token, then: gh secret set loc_gist_token --repo <owner>/<repo>
-        --body YOUR_TOKEN\"\n  echo \"::error::Bulk-provision all repos: https://github.com/valeratrades/nix/tree/e4338bf5943d7403b949a8e079f9073987d9cd68/home/scripts/shared_github_secrets.bash\"\
-        \n  exit 1\nfi\n"
-    - name: Install tokei
-      run: cargo install tokei
-    - id: count
-      name: Count lines of code
-      run: "# Extract repository name (e.g., \"valeratrades/readme-fw\" -> \"readme-fw\"\
-        )\nPNAME=\"${GITHUB_REPOSITORY##*/}\"\necho \"pname=$PNAME\" >> $GITHUB_OUTPUT\n\
-        \nLOC=$(tokei --output json | jq '.Total.code')\necho \"loc=$LOC\" >> $GITHUB_OUTPUT\n\
-        echo \"Lines of code for $PNAME: $LOC\"\n\n# Generate JSON with project-specific
-        filename\necho \"{\\\"schemaVersion\\\": 1, \\\"label\\\": \\\"LoC\\\", \\\
-        \"message\\\": \\\"$LOC\\\", \\\"color\\\": \\\"lightblue\\\"}\" > ${PNAME}-loc.json\n"
-    - name: Display generated JSON
-      run: cat ${{ steps.count.outputs.pname }}-loc.json
-    - env:
-        GH_TOKEN: ${{ secrets.loc_gist_token }}
-      name: Update gist
-      run: "F=\"${{ steps.count.outputs.pname }}-loc.json\"\ngh api -X PATCH gists/b48e6f02c61942200e7d1e3eeabf9bcb
-        -f \"files[$F][content]=$(cat \"$F\")\" --silent\n"
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - env:
+          loc_gist_token: ${{ secrets.loc_gist_token }}
+        name: Ensure loc_gist_token secret is configured
+        run: |
+          if [ -z "${loc_gist_token}" ]; then
+            echo "::error::Secret 'loc_gist_token' is not set (empty in this job)."
+            if [ "${{ github.event.repository.private }}" = "true" ]; then
+              echo "::error::This repo is PRIVATE. On GitHub Free-plan orgs, organization secrets are NOT exposed to private repos — if 'loc_gist_token' is set org-wide it still won't reach here. Fix: set it repo-level (gh secret set loc_gist_token -R ${{ github.repository }}), or upgrade the org to Team/Enterprise."
+            else
+              echo "::error::Add it under Settings → Secrets and variables → Actions (repo-level, or org-level with 'All repositories' visibility — org secrets reach public repos on any plan)."
+            fi
+            echo "::error::Create a token, then: gh secret set loc_gist_token --repo <owner>/<repo> --body YOUR_TOKEN"
+            echo "::error::Bulk-provision all repos: https://github.com/valeratrades/nix/tree/e4338bf5943d7403b949a8e079f9073987d9cd68/home/scripts/shared_github_secrets.bash"
+            exit 1
+          fi
+      - name: Install tokei
+        run: cargo install tokei
+      - id: count
+        name: Count lines of code
+        run: |
+          # Extract repository name (e.g., "valeratrades/readme-fw" -> "readme-fw")
+          PNAME="${GITHUB_REPOSITORY##*/}"
+          echo "pname=$PNAME" >> $GITHUB_OUTPUT
+
+          LOC=$(tokei --output json | jq '.Total.code')
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "Lines of code for $PNAME: $LOC"
+
+          # Generate JSON with project-specific filename
+          echo "{\"schemaVersion\": 1, \"label\": \"LoC\", \"message\": \"$LOC\", \"color\": \"lightblue\"}" > ${PNAME}-loc.json
+      - name: Display generated JSON
+        run: cat ${{ steps.count.outputs.pname }}-loc.json
+      - env:
+          GH_TOKEN: ${{ secrets.loc_gist_token }}
+        name: Update gist
+        run: |
+          F="${{ steps.count.outputs.pname }}-loc.json"
+          gh api -X PATCH gists/b48e6f02c61942200e7d1e3eeabf9bcb -f "files[$F][content]=$(cat "$F")" --silent
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@main
 name: Other
-'on':
+on:
   push: {}
   workflow_dispatch: {}
 permissions:
