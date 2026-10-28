@@ -1,6 +1,6 @@
 [package]
 name = "tilers_leptos"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "Leptos binding for the tilers packed-grid tiling layout. Drives the framework-agnostic tilers_core engine."
 license = "BlueOak-1.0.0"
