@@ -59,6 +59,8 @@ flowchart LR
 Bindings (`tilers_dioxus`, `tilers_leptos`) hold `PackedState` in one reactive
 cell, forward DOM events into it, render the view-model, and expose `PackedApi` — a cheap
 handle over that cell — to the host through `on_band`.
+Tile drags are the reducer's own pointer gestures; a native drag (a host's card, a file) only opens
+a tab it enters (`drag_enter_tab`), and the drop stays the content's.
 
 `tilers_grafana` is a *host* of the Leptos binding, not a third binding: a Grafana app
 plugin (`plugin/`, TS + `@grafana/scenes`) whose wasm half mounts `PackedArea` with one bare slot

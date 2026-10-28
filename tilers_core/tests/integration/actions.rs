@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Action kinds, in the order their swarm weights are drawn.
-pub const N_KINDS: usize = 10;
+pub const N_KINDS: usize = 11;
 /// Height of the tile chrome: `Config::title_h_rem`'s default resolved against the 16px root font a
 /// non-DOM target assumes. Mirrored here only to aim at headers and to re-run the pure
 /// `resolve_target` for the coverage tally.
@@ -40,6 +40,7 @@ const KEY: usize = 6;
 const SAVE_LOAD: usize = 7;
 const SET_MINS: usize = 8;
 const SCROLL: usize = 9;
+const DRAG_ENTER_TAB: usize = 10;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -93,6 +94,11 @@ pub enum Action {
 	SetMins {
 		panel: PanelId,
 		min: MinSize,
+	},
+	/// A native drag entering a tab, which may have closed or moved since the event was queued.
+	DragEnterTab {
+		group: GroupId,
+		panel: PanelId,
 	},
 }
 
@@ -199,6 +205,23 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 			world.scroll = *y;
 			world.state.set_scroll(*y);
 		}
+		Action::DragEnterTab { group, panel } => {
+			world.structural_edit();
+			let mut expect = world.state.grid().clone();
+			if let Some(c) = expect.cells.iter_mut().find(|c| c.group.id == *group)
+				&& let Some(i) = c.group.tabs.iter().position(|p| p == panel)
+			{
+				c.group.active = i;
+			}
+			world.state.drag_enter_tab(*group, panel);
+			if world.state.grid() != &expect {
+				return Err(format!(
+					"drag_enter_tab({group:?}, {panel:?}) did more than open that tab: {:?} vs {:?}",
+					world.state.grid().cells,
+					expect.cells
+				));
+			}
+		}
 	}
 	Ok(())
 }
@@ -215,6 +238,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		// `resize_start` indexes the cell list, so an empty grid has no grip to take.
 		avail.push(RESIZE);
 		avail.push(SET_MINS);
+		avail.push(DRAG_ENTER_TAB);
 		// A mid-resize grid is deliberately unsettled and `load` refits, so the two can't agree yet.
 		if world.state.resizing().is_none() {
 			avail.push(SAVE_LOAD);
@@ -303,7 +327,10 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 				// (an eighth of the title bar each) and 1px border.
 				Grip::Wall => (ox + world.size.0 - 1.0 - world.state.title_h() * 5.0 / 16.0, mid_y),
 				Grip::Bottom => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, b),
-				Grip::Fold => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 5.0 / 16.0),
+				Grip::Fold => (
+					ox + (c.x as f64 + c.w as f64 / 2.0) * sw,
+					world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 5.0 / 16.0,
+				),
 			};
 			let to = aim(frng, world);
 			Action::Resize {
@@ -366,6 +393,17 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 				// is the case only a re-floor can reach, and the one that must clamp rather than spill.
 				min: min(frng, world.state.cols(), world.state.rows()),
 			}
+		}
+		DRAG_ENTER_TAB => {
+			let c = &cells[frng.below(cells.len() as u32) as usize];
+			let panel = c.group.tabs[frng.below(c.group.tabs.len() as u32) as usize].clone();
+			// Some are stale: the tab under a gid that never existed, or under another tile.
+			let group = match frng.below(8) {
+				0 => GroupId(u64::MAX),
+				1 => pick_group(frng, world),
+				_ => c.group.id,
+			};
+			Action::DragEnterTab { group, panel }
 		}
 		_ => unreachable!("kind is one of the constants pushed into `avail`"),
 	})

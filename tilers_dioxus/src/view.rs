@@ -319,6 +319,10 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 												state.write().press_tab(id.clone(), from, (c.x, c.y), (g.x, g.y));
 											}
 										},
+										ondragenter: {
+											let (id, from) = (tab.id.clone(), frame.gid);
+											move |_| state.write().drag_enter_tab(from, &id)
+										},
 										"{tab.title}"
 									}
 								}

@@ -143,7 +143,13 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	for f in &frames {
 		let Some([l, top, w, h]) = rect(&f.style) else { continue };
 		for (grip, style) in &f.grips {
-			let fold = || style.trim_start_matches("--tl-fold:").trim_end_matches("px;").parse::<f64>().expect("a fold grip carries its --tl-fold");
+			let fold = || {
+				style
+					.trim_start_matches("--tl-fold:")
+					.trim_end_matches("px;")
+					.parse::<f64>()
+					.expect("a fold grip carries its --tl-fold")
+			};
 			if !world.framed {
 				if matches!(grip, Grip::Wall | Grip::Fold) {
 					return Err(format!("{:?} has a {grip:?} grip in a view nothing frames", f.gid));
