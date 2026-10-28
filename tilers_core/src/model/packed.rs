@@ -597,8 +597,16 @@ mod tests {
 		};
 		let rects = |g: &PackedGrid| g.cells.iter().map(|c| (c.x, c.y, c.w, c.h)).collect::<Vec<_>>();
 
-		assert_eq!(rects(&g.resized(0, 0, 1, 2, 6)), [(0, 0, 1, 2), (0, 2, 2, 2), (2, 0, 3, 4)], "shrinking leaves the neighbours where they are");
-		assert_eq!(rects(&g.resized(0, 0, 4, 2, 6)), [(0, 0, 4, 2), (0, 2, 2, 2), (4, 0, 1, 4)], "growing pushes the tall tile, down to its floor");
+		assert_eq!(
+			rects(&g.resized(0, 0, 1, 2, 6)),
+			[(0, 0, 1, 2), (0, 2, 2, 2), (2, 0, 3, 4)],
+			"shrinking leaves the neighbours where they are"
+		);
+		assert_eq!(
+			rects(&g.resized(0, 0, 4, 2, 6)),
+			[(0, 0, 4, 2), (0, 2, 2, 2), (4, 0, 1, 4)],
+			"growing pushes the tall tile, down to its floor"
+		);
 		assert_eq!(rects(&g.resized(0, 0, 6, 2, 6)), rects(&g.resized(0, 0, 4, 2, 6)), "the edge stops at the floor");
 		assert!(!g.free_left(2) && !g.free_left(0), "a boundary has no left grip, nor does the view's edge");
 		let gap = PackedGrid {
@@ -606,7 +614,11 @@ mod tests {
 			..Default::default()
 		};
 		assert!(gap.free_left(1), "room on the left is a left grip");
-		assert_eq!(rects(&gap.resized(1, 0, 5, 2, 6)), [(0, 0, 1, 2), (1, 0, 4, 2)], "it crosses the gap, then stops at a floor it reaches");
+		assert_eq!(
+			rects(&gap.resized(1, 0, 5, 2, 6)),
+			[(0, 0, 1, 2), (1, 0, 4, 2)],
+			"it crosses the gap, then stops at a floor it reaches"
+		);
 	}
 
 	/// Build a grid whose cells carry distinct group ids, so drops can address them by id.

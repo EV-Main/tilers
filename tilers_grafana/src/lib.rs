@@ -191,13 +191,9 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, publi
 				web_sys::console::warn_1(&format!("tilers_grafana: stored layout hosts panels the dashboard no longer has ({stale:?}); re-seeding").into());
 				a.reset();
 			}
-			let depth = seeds.iter().map(|s| s.y + s.h).max().expect("a dock has panels");
-			let (cols, rows) = (a.cols(), a.rows().max(depth)); // a short view scrolls rather than shrinks
-			// edges, not lengths, are scaled, so neighbours meet and the last reaches the view's edge
-			let span = |at: u32, len: u32, of: u32, steps: u32| {
-				let edge = |e: u32| (e as f64 * steps as f64 / of as f64).round() as u32;
-				(edge(at + len) - edge(at)).max(1)
-			};
+			let cols = a.cols();
+			// edges, not widths, are scaled, so neighbours meet and the last reaches the view's edge
+			let edge = |e: u32| (e as f64 * cols as f64 / GRID_COLUMNS as f64).round() as u32;
 			for run in seeds.chunk_by(|a, b| (a.x, a.y, a.w, a.h) == (b.x, b.y, b.w, b.h)) {
 				let s = &run[0];
 				let group = Group {
@@ -205,7 +201,7 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, publi
 					tabs: run.iter().map(|s| s.id.clone()).collect(),
 					active: 0,
 				};
-				a.place(group, span(s.x, s.w, GRID_COLUMNS, cols), span(s.y, s.h, depth, rows));
+				a.place(group, (edge(s.x + s.w) - edge(s.x)).max(1), s.h);
 			}
 		});
 		let request_tab: Arc<dyn Fn(GroupId) + Send + Sync> = Arc::new(move |gid: GroupId| {

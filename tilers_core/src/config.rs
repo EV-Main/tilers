@@ -14,9 +14,9 @@ pub struct Config {
 	/// `container_width / cols`, so within a band the layout still stretches to fill. A finer grid
 	/// (more steps) gives smaller resize/placement increments.
 	pub steps: u32 = 64,
-	/// Height of a grid row, in `rem`: a fixed length, so a container's height decides only how much
-	/// of the layout shows (whitespace below, or a scroll), never a tile's size. The default is the
-	/// title bar's, and ≈ a square step on a desktop-wide container.
+	/// Least height of a grid row, in `rem`: rows stretch so a layout shorter than the container ends at
+	/// its bottom, and a deeper one scrolls at this length. Panel mins resolve against it. The default is
+	/// the title bar's, and ≈ a square step on a desktop-wide container.
 	pub row_h_rem: f64 = 2.0,
 	/// `localStorage` namespace for the built-in seed cache; the [`Band`] is appended. `None` ⇒ no
 	/// client cache at all, and every band entry reports a miss for the host to seed.
@@ -89,7 +89,7 @@ impl Breakpoint {
 	/// Scale a desktop-tuned ([`Config`]) column count down to this band (≥ 1). `base · design /
 	/// design(Xl)` holds the horizontal step's physical px ~constant — scaling the count by the
 	/// band's width gives the same step size, hence the reflow rather than a shrink. The vertical
-	/// step is fixed outright ([`Config::row_h_rem`]).
+	/// step only stretches from [`Config::row_h_rem`].
 	pub(crate) fn scale_cols(self, base: u32) -> u32 {
 		((base as f64 * self.design() / Self::Xl.design()).round() as u32).max(1)
 	}

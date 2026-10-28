@@ -1,7 +1,7 @@
 # Architecture
 
 A packed-grid tiling layout: tiles have a fixed starting size, snap to a step grid,
-never overlap, and leave whitespace below (InsilicoTerminal's look). One engine
+never overlap, and fill the view down to its bottom (InsilicoTerminal's look). One engine
 (`tilers_core`) drives two bindings (`tilers_dioxus`, `tilers_leptos`).
 
 ## The one idea
@@ -115,10 +115,13 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   and its scrollbars stop short of the corner and leave their outer edge to the grip.
 - One gesture at a time: a drag can't start while a resize is in flight, nor a resize while a drag
   is.
-- A row is a fixed length (`Config::row_h_rem`): the container's height decides only how much of
-  the layout shows, never where a tile is or how tall. Only its width reflows.
+- A row stretches so a layout shorter than the view ends at its bottom, never below
+  `Config::row_h_rem`, at which a deeper one scrolls. The container's height decides how long a row
+  renders, never where a tile is in the grid or how many rows it spans. A gesture holds the row it
+  started on, so the grid under the pointer stays still.
 - A min belongs to the panel (`DockPanel::min`), not the tile. A cell's floor is derived from its
-  tabs' declared mins at the live step, on every measure and tab change; never stored as layout.
+  tabs' declared mins at the live column step and the least row, on every measure and tab change;
+  never stored as layout.
 - A cached layout that is corrupt, from a future schema, or empty is a **miss** that says
   so on the console — never a silent wipe.
 - The framework's global key footprint is exactly `Keymap::root` ∪ {leader} ∪ {Esc while the

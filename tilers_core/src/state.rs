@@ -42,7 +42,8 @@ const MAX_AUTOSCROLL: f64 = 20.0;
 pub struct PackedState {
 	grid: PackedGrid,
 	cols: u32,
-	/// Live px-per-step on each axis (`width / cols`, `Config::row_h_rem`); `(0, 0)` until first measure.
+	/// Measured px-per-step on each axis (`width / cols`, `Config::row_h_rem`); `(0, 0)` until first
+	/// measure. Rows render at [`step`](Self::step), which stretches this one.
 	step_px: (f64, f64),
 	/// The document's actual root font size, re-read at every measure. Bridges rem ⇄ px for the
 	/// chrome height and a rem-expressed [`MinSize`].
@@ -201,7 +202,7 @@ impl PackedState {
 			self.grid = self.resize.take().expect("matched above").press;
 			return;
 		};
-		let (sw, sh) = self.step_px;
+		let (sw, sh) = self.step();
 		let shift = |at: u32, from: f64, to: f64, step: f64| (at as i64 + ((to - from) / step).round() as i64).max(0) as u32;
 		let c = &r.press.cells[idx];
 		let (mut left, mut right, mut h) = (c.x, c.x + c.w, c.h);
@@ -227,7 +228,8 @@ impl PackedState {
 		self.refloor();
 	}
 
-	/// The floor a tile hosting `tabs` gets at the live step: the max of their resolved mins.
+	/// The floor a tile hosting `tabs` gets at the row's least length, which no stretch goes under: the
+	/// max of their resolved mins.
 	fn floor(&self, tabs: &[PanelId]) -> (u32, u32) {
 		let (sw, sh) = self.step_px;
 		tabs.iter()
@@ -293,10 +295,23 @@ impl PackedState {
 		self.cols
 	}
 
-	/// Whole rows the container shows: what a tile placed at the top spans to fill its height.
+	/// Whole rows of [`Config::row_h_rem`] the container shows.
 	pub fn rows(&self) -> u32 {
 		assert!(self.step_px.1 > 0.0, "rows before the first measure: no step size yet");
 		(self.root_size.1 / self.step_px.1) as u32
+	}
+
+	/// The step tiles render at: a row stretches so a layout shorter than the view ends at its bottom,
+	/// never below [`Config::row_h_rem`]. Read from the layout a gesture started on, so it holds still
+	/// under the pointer; rounded down to a layout unit (1/64 px), so the end never spills into a scroll.
+	fn step(&self) -> (f64, f64) {
+		let (sw, row) = self.step_px;
+		let layout = self.resize.as_ref().map_or(&self.grid, |r| &r.press);
+		let depth = layout.cells.iter().map(|c| c.y + c.h).max().unwrap_or(0);
+		if depth == 0 {
+			return (sw, row);
+		}
+		(sw, row.max((self.root_size.1 / depth as f64 * 64.0).floor() / 64.0))
 	}
 
 	/// The band the layout is stored under — coarser than the [`Breakpoint`] driving `cols`.
@@ -329,7 +344,7 @@ impl PackedState {
 	/// Store the root's origin (to map pointer→grid space) and its content box, then reflow the
 	/// grid to fill it: classify the width into a responsive band, stretch `cols` across the
 	/// container's width (a horizontal step is `width / cols`, cols scaled per band; a vertical one is
-	/// [`Config::row_h_rem`]), and refloor tiles onto the new step. `framed`: see [`framed`].
+	/// [`Config::row_h_rem`], stretched by [`step`](Self::step)), and refloor tiles onto the new step. `framed`: see [`framed`].
 	pub fn set_measure(&mut self, origin: (f64, f64), size: (f64, f64), framed: bool) {
 		self.root_origin = origin;
 		self.root_size = size;
@@ -469,7 +484,7 @@ impl PackedState {
 			d.armed = true;
 		}
 		let (ox, oy) = self.root_origin;
-		let (sw, sh) = self.step_px;
+		let (sw, sh) = self.step();
 		// Reference the moving block's center (ghost top-left + half its size), not the raw pointer —
 		// the cell the block visibly covers is where it lands.
 		let cx = cursor.0 - d.grab.0 + d.src_w as f64 * sw / 2.0;
@@ -552,7 +567,7 @@ impl PackedState {
 		let window = web_sys::window().expect("a browser window");
 		let page = window.document().expect("a document").scrolling_element().expect("a standards-mode document has one");
 		let vh = window.inner_height().expect("innerHeight never throws").as_f64().expect("innerHeight is a number");
-		let band = self.step_px.1;
+		let band = self.step().1;
 		let ramp = |depth: f64| {
 			if depth <= 0.0 {
 				MAX_AUTOSCROLL
@@ -832,7 +847,7 @@ impl PackedState {
 	/// preview's order. `titles` maps panel ids to their tab labels (owned by the binding).
 	pub fn frames(&self, titles: &HashMap<PanelId, String>) -> Vec<Frame> {
 		let g = self.preview();
-		let (sw, sh) = self.step_px;
+		let (sw, sh) = self.step();
 		let maximized = self.live(self.maximized);
 		let mut out = Vec::new();
 		for (idx, cell) in g.cells.iter().enumerate() {
@@ -891,7 +906,7 @@ impl PackedState {
 	/// below the tile's top.
 	fn grips(&self, g: &PackedGrid, idx: usize, maximized: bool) -> Vec<(Grip, String)> {
 		let c = &g.cells[idx];
-		let sh = self.step_px.1;
+		let sh = self.step().1;
 		let view_bottom = self.scroll + self.root_size.1;
 		let (top, bottom) = (c.y as f64 * sh, (c.y + c.h) as f64 * sh);
 		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
@@ -937,7 +952,7 @@ impl PackedState {
 	/// binding knows but the layout doesn't simply aren't in the map — the binding hides them.
 	pub fn content_slots(&self) -> HashMap<PanelId, ContentSlot> {
 		let g = self.preview();
-		let (sw, sh) = self.step_px;
+		let (sw, sh) = self.step();
 		let hidden = self.ghost_hidden(&g);
 		let maximized = self.live(self.maximized);
 		let mut map = HashMap::new();
@@ -984,7 +999,7 @@ impl PackedState {
 				active: true,
 			}],
 		};
-		let (sw, sh) = self.step_px;
+		let (sw, sh) = self.step();
 		Some(Ghost {
 			tabs,
 			left: d.cursor.0 - d.grab.0,
@@ -998,7 +1013,7 @@ impl PackedState {
 	/// uses. Dead/closed groups drop out of the filter (the set may keep stale ids).
 	pub fn inspect(&self) -> Vec<(String, String)> {
 		let g = self.preview();
-		let (sw, sh) = self.step_px;
+		let (sw, sh) = self.step();
 		g.cells
 			.iter()
 			.filter(|c| self.popups.contains(&c.group.id))

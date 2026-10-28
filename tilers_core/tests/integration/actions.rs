@@ -247,7 +247,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 
 	let ws: Vec<u32> = avail.iter().map(|&k| weights[k].max(1)).collect();
 	let kind = avail[frng.weighted(&ws)];
-	let (sw, sh) = world.step_px();
+	let (sw, sh) = world.shown_step();
 	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
 
 	Some(match kind {
@@ -524,7 +524,7 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 /// the run — no invariant reads it.
 fn resolve(world: &World, source: &DragSource, grab: (f64, f64), cursor: (f64, f64)) -> DropTarget {
 	let grid = world.state.grid();
-	let (sw, sh) = world.step_px();
+	let (sw, sh) = world.shown_step();
 	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
 	let c = grid
 		.cells
@@ -631,7 +631,7 @@ fn save_load(world: &mut World) -> Result<(), String> {
 /// or a tile edge, so each interesting site is drawn with its own probability instead.
 fn aim(frng: &mut Frng, world: &World) -> (f64, f64) {
 	let cells = &world.state.grid().cells;
-	let (sw, sh) = world.step_px();
+	let (sw, sh) = world.shown_step();
 	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
 	match frng.below(5) {
 		// A tile's body: resolves to a displace at the row below it.

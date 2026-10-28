@@ -73,10 +73,10 @@ test('panels sharing a gridPos open as the tabs of one tile, the first active', 
 	await expect(overlay(page, 3)).toBeHidden()
 })
 
-test('a fresh seed fills the frame: tiles meet its right edge, and end less than a row above its bottom', async ({ page }) => {
+test('a fresh seed fills the frame: tiles meet its right edge and end at its bottom', async ({ page }) => {
 	const f = await frame(page, `${DOCK}?_tilers.host`, { onReady: HOST() })
 	await seeded(f)
-	const { width, height, right, bottom, row } = await f.locator('.tl-packed').evaluate((root) => {
+	const { width, height, right, bottom } = await f.locator('.tl-packed').evaluate((root) => {
 		const o = root.getBoundingClientRect()
 		const rs = [...root.querySelectorAll('.tl-tile')].map((t) => t.getBoundingClientRect())
 		return {
@@ -84,12 +84,11 @@ test('a fresh seed fills the frame: tiles meet its right edge, and end less than
 			height: root.clientHeight,
 			right: Math.max(...rs.map((r) => r.right - o.left)),
 			bottom: Math.max(...rs.map((r) => r.bottom - o.top)),
-			row: 2 * parseFloat(getComputedStyle(document.documentElement).fontSize), // `Config::row_h_rem`'s default
 		}
 	})
 	expect(right).toBeCloseTo(width, 0)
 	expect(height - bottom).toBeGreaterThanOrEqual(0)
-	expect(height - bottom).toBeLessThan(row)
+	expect(height - bottom).toBeLessThan(1)
 })
 
 test('nothing mounts before the parent answers; an empty answer seeds', async ({ page }) => {

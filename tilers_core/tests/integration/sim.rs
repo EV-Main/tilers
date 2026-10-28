@@ -78,27 +78,40 @@ impl World {
 		Ok(fresh.grid().clone())
 	}
 
-	/// Live px per grid step, the same `(width / cols, row_h_rem)` [`PackedState::set_measure`]
-	/// derives — the generator needs it to aim a pointer at a tile.
+	/// Px per grid step at the least row, the same `(width / cols, row_h_rem)` [`PackedState::set_measure`]
+	/// derives — what floors resolve at.
 	pub fn step_px(&self) -> (f64, f64) {
 		(self.size.0 / self.state.cols() as f64, self.cfg.row_h_rem * 16.0) // a native root font is 16px
 	}
 
+	/// Px per grid step as tiles render, read off a painted frame — the generator needs it to aim a
+	/// pointer at a tile.
+	pub fn shown_step(&self) -> (f64, f64) {
+		let (sw, least) = self.step_px();
+		let cells = &self.state.grid().cells;
+		let sh = self.state.frames(&HashMap::new()).iter().filter(|f| !f.shadow && !f.style.contains('%')).find_map(|f| {
+			let c = cells.iter().find(|c| c.group.id == f.gid)?;
+			let at = f.style.find("height:").expect("a placed tile has a px height") + "height:".len();
+			let h: f64 = f.style[at..f.style[at..].find("px").expect("px unit") + at].parse().expect("a number");
+			Some(h / c.h as f64)
+		});
+		(sw, sh.unwrap_or(least)) // no tile on screen: nothing to aim at, any row will do
+	}
+
 	/// A container resize, through the real breakpoint path. Returns `Err` if a size seen since the
 	/// last structural edit fails to reproduce its arrangement — i.e. resizing away and back left a
-	/// lasting impact, which is invalid — or if a change of height alone moved or resized a tile:
-	/// height only decides how much of the layout shows.
+	/// lasting impact, which is invalid — or if a change of height alone moved or resized a tile in the
+	/// grid: height only decides how long a row renders.
 	pub fn measure(&mut self, w: f64, h: f64, framed: bool) -> Result<(), String> {
-		let frames = |s: &PackedState| s.frames(&HashMap::new()).into_iter().map(|f| f.style).collect::<Vec<_>>();
-		let before = (self.size.0 == w).then(|| frames(&self.state));
+		let before = (self.size.0 == w).then(|| self.state.grid().clone());
 		self.size = (w, h);
 		self.framed = framed;
 		self.state.set_measure(self.origin, self.size, framed);
 		self.resolve_band()?;
 		if let Some(before) = before
-			&& frames(&self.state) != before
+			&& *self.state.grid() != before
 		{
-			return Err(format!("resizing to {w}x{h}, height alone, moved tiles: {before:?} → {:?}", frames(&self.state)));
+			return Err(format!("resizing to {w}x{h}, height alone, moved tiles: {:?} → {:?}", before.cells, self.state.grid().cells));
 		}
 		match self.measure_log.iter().find(|(s, _)| *s == self.size) {
 			Some((_, prev)) if prev != self.state.grid() => Err(format!(

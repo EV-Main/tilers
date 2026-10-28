@@ -117,7 +117,10 @@ pub struct Keymap {
 
 impl Default for Keymap {
 	fn default() -> Self {
-		let run = |on: Trigger, b: Builtin| Binding { on, node: Node::Run(Command::Builtin(b)) };
+		let run = |on: Trigger, b: Builtin| Binding {
+			on,
+			node: Node::Run(Command::Builtin(b)),
+		};
 		let key = |key: &'static str| Trigger::from(Chord { key, .. });
 		let cmd = |key: &'static str| Trigger {
 			other: Chord { key, ctrl: true, .. },
@@ -165,9 +168,10 @@ impl From<&web_sys::KeyboardEvent> for KeyInput {
 		use wasm_bindgen::JsCast;
 		// `composed_path()[0]`, not `target()`: on `window`, an `<input>` inside a shadow root reports
 		// as its host element.
-		let editable = e.composed_path().get(0).dyn_into::<web_sys::Element>().is_ok_and(|el| {
-			matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT") || el.dyn_ref::<web_sys::HtmlElement>().is_some_and(web_sys::HtmlElement::is_content_editable)
-		});
+		let editable =
+			e.composed_path().get(0).dyn_into::<web_sys::Element>().is_ok_and(|el| {
+				matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT") || el.dyn_ref::<web_sys::HtmlElement>().is_some_and(web_sys::HtmlElement::is_content_editable)
+			});
 		Self {
 			key: e.key(),
 			ctrl: e.ctrl_key(),
@@ -363,7 +367,10 @@ impl Trie {
 				scope: matches!(item, Item::Scope(..)),
 			})
 			.collect();
-		Some(Hint { prefix: self.sequence(pending), rows })
+		Some(Hint {
+			prefix: self.sequence(pending),
+			rows,
+		})
 	}
 
 	/// Every leaf, depth-first, as (full sequence, label).

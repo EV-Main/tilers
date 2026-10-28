@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+Rows stretch so a layout shorter than its view ends at the bottom, never below `2rem`, so a deeper one
+still scrolls. That covers the part of a row 0.5.0 left empty, and layouts resized or cached later.
+Panels open at their dashboard rows again, with no scaling.
+
 ## 0.5.0
 
 A fresh layout fills its view. Tiles split the width exactly, so three thirds no longer leave a column

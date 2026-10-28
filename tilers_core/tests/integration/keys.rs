@@ -231,7 +231,10 @@ fn saving_tracks_what_the_host_wired() {
 
 #[test]
 fn flat_keymap_has_no_leader() {
-	let cfg = || Config { keymap: flat(), ..Default::default() };
+	let cfg = || Config {
+		keymap: flat(),
+		..Default::default()
+	};
 	check(cfg(), seq("u"), Lands::Undone, true);
 	let (mut s, _) = edited(cfg());
 	let out = press(&mut s, seq("Alt+z")).remove(0);
