@@ -1,12 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+Panels with the same `gridPos` open as the tabs of one tile, in the dashboard's order, the first active.
+A page framing the dashboard with `?_tilers.host` takes part by `postMessage`: the dock waits for its
+answer, then opens the layout it published for the band when the browser has none cached, `leader S`
+posts the layout back (only if the page allows it), and the page can say a line in the toast. See the
+README.
+Framed in another page, a panel on the right edge of the view, or reaching its bottom, has that grip just
+inside the edge, clear of the frame's own; it only shrinks the panel.
+A native drag entering a tab opens it, so its panel can take the drop. A drag held past or near a
+scroller's edge scrolls it. A tile's header has a rim, with grip dots, that drags the whole tile, and a
+carried tile's ghost shows its whole tab strip.
+
 ## 0.3.3
 
 Resizing a panel by its side pushes the panels it grows into, which give up the space, instead of
 shoving them down; shrinking it leaves its neighbours where they are. A left edge with room beside it
-has a grip of its own. Dragging back restores what a resize shrank. Framed in another page, a panel on
-the right edge of the view, or reaching its bottom, has that grip just inside the edge, clear of the
-frame's own; it only shrinks the panel.
+has a grip of its own. Dragging back restores what a resize shrank.
 `leader s s` says it cached the layout in a toast.
 The leader is `Alt+z` (was `Alt+t`), and binds match the key your layout sends, never its physical
 position.

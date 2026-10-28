@@ -57,6 +57,10 @@ export function toScene(dash: Dashboard & { uid: string }): EmbeddedScene {
   const hideTime = dash.timepicker?.hidden || '_dash.hideTimePicker' in url;
   const hideVariables = '_dash.hideVariables' in url;
   const hideLinks = '_dash.hideLinks' in url;
+  const host = '_tilers.host' in url;
+  if (host && window.parent === window) {
+    throw new Error('`_tilers.host` says an embedding page answers, but this page is not framed');
+  }
   const refresh = new SceneRefreshPicker({ refresh: dash.refresh, intervals: dash.timepicker?.refresh_intervals, withText: true });
   const controls = [
     ...(hideVariables ? [] : [new VariableValueSelectors({})]),
@@ -87,6 +91,7 @@ export function toScene(dash: Dashboard & { uid: string }): EmbeddedScene {
       gridPos: Object.fromEntries(panels.map((p) => [p.panel.state.key!, p.gridPos])),
       dock: Object.fromEntries(panels.map((p) => [p.panel.state.key!, p.dock])),
       storageKey: `dv-grafana-${dash.uid}`,
+      host,
       titles: new Map(),
     }),
   });
