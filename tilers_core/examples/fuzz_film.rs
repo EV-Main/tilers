@@ -55,7 +55,7 @@ const C_FG: &str = "#ddd";
 /// `--tl-shadow-bg` is `rgba(160,160,160,0.18)`; flattened over the tile bg so the landing cell is
 /// legible at film scale.
 const C_SHADOW: &str = "#3d3d3d";
-const BUCKETS: [&str; 32] = [
+const BUCKETS: [&str; 33] = [
 	"Measure",
 	"Place",
 	"AddTab",
@@ -88,6 +88,7 @@ const BUCKETS: [&str; 32] = [
 	"band md",
 	"band xl",
 	"Scroll",
+	"DragEnterTab",
 ];
 /// Every flag also reads a `FILM_*` variable, so the film is scriptable from an env without a
 /// second code path; clap's precedence puts the flag first.
@@ -125,7 +126,7 @@ fn main() {
 	let mut counts = [0u64; BUCKETS.len()];
 	let mut best = (0u64, 0u32); // (seed, distinct buckets)
 	for seed in 0..args.seeds {
-		let mut mask = 0u32;
+		let mut mask = 0u64;
 		let mut observe = |action: Option<&actions::Action>, world: &sim::World| {
 			let Some(a) = action else { return };
 			let hits = hit(a, world);
@@ -179,7 +180,7 @@ fn main() {
 
 /// The bucket mask one applied input event lands in. Drop targets are the ones `resolve_target`
 /// actually returned during the gesture, not the ones the generator aimed for.
-fn hit(action: &actions::Action, world: &sim::World) -> u32 {
+fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 	use actions::{Action as A, Aim, Grab};
 	use tilers_core::keys::Builtin as B;
 	let mut m = 1
@@ -194,6 +195,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u32 {
 			A::SaveLoad => 7,
 			A::SetMins { .. } => 8,
 			A::Scroll { .. } => 31,
+			A::DragEnterTab { .. } => 32,
 		};
 	if let A::Drag { grab, commit, .. } = action {
 		m |= 1 << if world.resolved.is_empty() { 10 } else { 9 };
@@ -265,6 +267,7 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 		A::SaveLoad => "SaveLoad".to_string(),
 		A::SetMins { panel, min } => format!("SetMins {} = {}", panel.0, min_label(min)),
 		A::Scroll { y } => format!("Scroll to {y:.0}px"),
+		A::DragEnterTab { group, panel } => format!("DragEnterTab {} in g{}", panel.0, group.0),
 	}
 }
 

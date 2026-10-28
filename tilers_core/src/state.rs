@@ -522,8 +522,15 @@ impl PackedState {
 				self.grid.drop(d.source, t, self.cols);
 				self.refloor();
 			}
-		} else if let DragSource::Tab { panel, from } = &d.source
-			&& let Some(c) = self.grid.cells.iter_mut().find(|c| c.group.id == *from)
+		} else if let DragSource::Tab { panel, from } = &d.source {
+			self.drag_enter_tab(*from, panel);
+		}
+	}
+
+	/// A native drag (a host's card, a file) entered a tab: open it, so its content can take the drop.
+	/// A tab gone since the event was queued is ignored.
+	pub fn drag_enter_tab(&mut self, gid: GroupId, panel: &PanelId) {
+		if let Some(c) = self.grid.cells.iter_mut().find(|c| c.group.id == gid)
 			&& let Some(i) = c.group.tabs.iter().position(|p| p == panel)
 		{
 			c.group.active = i;
@@ -575,15 +582,15 @@ impl PackedState {
 				(top.max(0.0), (top + e.client_height() as f64).min(vh))
 			};
 			let (up, down) = (ramp(y - top), ramp(bottom - y));
-			let max = e.scroll_height() - e.client_height();
-			let step = if up >= down && up > 0.0 && e.scroll_top() > 0 {
+			let (at, max) = (e.scroll_top() as f64, (e.scroll_height() - e.client_height()) as f64); // `scroll_top` is `f64` under `web_sys_unstable_apis`
+			let step = if up >= down && up > 0.0 && at > 0.0 {
 				-up.ceil()
-			} else if down > 0.0 && e.scroll_top() < max {
+			} else if down > 0.0 && at < max {
 				down.ceil()
 			} else {
 				continue;
 			};
-			e.set_scroll_top(e.scroll_top() + step as i32);
+			e.scroll_by_with_x_and_y(0.0, step);
 			break;
 		}
 		let r = root.get_bounding_client_rect();

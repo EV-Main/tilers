@@ -477,6 +477,7 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 		.into_iter()
 		.map(move |tab| {
 			let id = tab.id.clone();
+			let entered = tab.id.clone();
 			view! {
 				<div
 					data-panel=tab.id.0.clone()
@@ -496,6 +497,7 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 								)
 							});
 					}
+					on:dragenter=move |_| state.update(|s| s.drag_enter_tab(gid, &entered))
 				>
 					{tab.title}
 				</div>

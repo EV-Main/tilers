@@ -4227,7 +4227,7 @@ dependencies = [
 
 [[package]]
 name = "tilers"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "tilers_core",
  "tilers_dioxus",
@@ -4236,7 +4236,7 @@ dependencies = [
 
 [[package]]
 name = "tilers_core"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "clap",
  "serde",
@@ -4248,7 +4248,7 @@ dependencies = [
 
 [[package]]
 name = "tilers_dioxus"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "dioxus",
  "gloo-timers",
@@ -4259,7 +4259,7 @@ dependencies = [
 
 [[package]]
 name = "tilers_grafana"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -4272,7 +4272,7 @@ dependencies = [
 
 [[package]]
 name = "tilers_leptos"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "leptos",
  "send_wrapper",

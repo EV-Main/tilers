@@ -16,6 +16,8 @@ before.
 - `autoscroll.spec.mjs` — a drag held past the root's top (over the host chrome) or inside its
   bottom band scrolls it with no further moves, and the drop lands in the scrolled view. Firefox is
   `fixme`: its drag never arms (moves go to the pressed header, not the capture surface).
+- `foreign-drag.spec.mjs` — a native `dragenter` (with a `DataTransfer`, as a host card or a file
+  sends) on an inactive tab activates it and shows its content.
 - `grafana.spec.mjs` — the Grafana plugin (`tilers_grafana`) against `nix run .#dev -- grafana`
   and its testdata fixture: panels render natively in tiles, tab-joins switch panels, an inactive
   tab issues no queries, the root re-measures on a container-only resize, the cache survives a
