@@ -22,8 +22,39 @@ interface DockLayoutState extends SceneObjectState {
   /** By panel key. */
   dock: Record<string, DockSpec>;
   storageKey: string;
+  /** An embedding page answers with the published layouts (`?_tilers.host`); nothing mounts before it does. */
+  host: boolean;
   /** Interpolated, by panel key. */
   titles: Map<string, string>;
+}
+
+const BANDS = ['sm', 'md', 'xl'];
+
+interface HostAnswer {
+  published: Map<string, string>;
+  publish: boolean;
+}
+
+/** The embedding page's `host` message, which is untrusted input: whatever is off throws, naming it. */
+function parseHost(m: Record<string, unknown>): HostAnswer {
+  const { published, publish } = m;
+  if (typeof publish !== 'boolean') {
+    throw new Error(`tilers host message: "publish" must be a boolean, got ${JSON.stringify(publish)}`);
+  }
+  if (typeof published !== 'object' || published === null || Array.isArray(published)) {
+    throw new Error(`tilers host message: "published" must be an object, got ${JSON.stringify(published)}`);
+  }
+  const layouts = new Map<string, string>();
+  for (const [band, layout] of Object.entries(published)) {
+    if (!BANDS.includes(band)) {
+      throw new Error(`tilers host message: published band "${band}" is not one of ${BANDS.join(', ')}`);
+    }
+    if (typeof layout !== 'string') {
+      throw new Error(`tilers host message: published["${band}"] must be a layout string, got ${typeof layout}`);
+    }
+    layouts.set(band, layout);
+  }
+  return { published: layouts, publish };
 }
 
 /** The dashboard body: panels laid out by the tilers grid, each rendered natively through a portal. */
@@ -43,15 +74,62 @@ export class DockLayout extends SceneObjectBase<DockLayoutState> {
 }
 
 function DockLayoutRenderer({ model }: SceneComponentProps<DockLayout>) {
-  const { children, gridPos, dock: specs, storageKey, titles } = model.useState();
+  const { children, gridPos, dock: specs, storageKey, host, titles } = model.useState();
   const styles = useStyles2(getStyles);
   const root = useRef<HTMLDivElement>(null);
   const pointer = useRef({ x: 0, y: 0 });
   const [dock, setDock] = useState<Dock>();
   const [slots, setSlots] = useState<ReadonlyMap<string, HTMLElement>>(new Map());
+  const dockRef = useRef<Dock>();
+  const [answer, setAnswer] = useState<HostAnswer>();
   const [menu, setMenu] = useState<{ gid: bigint; x: number; y: number }>();
 
   useEffect(() => {
+    if (!host) {
+      return;
+    }
+    let answered = false;
+    const onMessage = (e: MessageEvent) => {
+      const m = e.data;
+      if (e.source !== window.parent || typeof m !== 'object' || m === null || !('tilers' in m)) {
+        return; // not addressed to us
+      }
+      switch (m.tilers) {
+        case 'host':
+          if (answered) {
+            throw new Error('tilers host message: a second `host` for one `ready`');
+          }
+          answered = true;
+          setAnswer(parseHost(m));
+          break;
+        case 'notify':
+          if (!answered) {
+            throw new Error('tilers notify message: arrived before `host`');
+          }
+          if (typeof m.text !== 'string') {
+            throw new Error(`tilers notify message: "text" must be a string, got ${JSON.stringify(m.text)}`);
+          }
+          if (!dockRef.current) {
+            throw new Error('tilers notify message: no dock is mounted to show it');
+          }
+          dockRef.current.notify(m.text);
+          break;
+        default:
+          throw new Error(`tilers message: unknown kind ${JSON.stringify(m.tilers)}`);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    window.parent.postMessage({ tilers: 'ready' }, '*'); // the parent's origin is unknowable, and a layout is no secret
+    return () => {
+      window.removeEventListener('message', onMessage);
+      setAnswer(undefined);
+    };
+  }, [host]);
+
+  useEffect(() => {
+    if (host && !answer) {
+      return;
+    }
     let live: Dock | undefined;
     let gone = false;
     ready.then(() => {
@@ -68,16 +146,22 @@ function DockLayoutRenderer({ model }: SceneComponentProps<DockLayout>) {
         root.current!,
         seeds,
         storageKey,
+        answer?.published ?? new Map(),
+        answer?.publish
+          ? (band: string, layout: string) => window.parent.postMessage({ tilers: 'publish', band, layout }, '*')
+          : undefined,
         (id: string, el: HTMLElement) => setSlots((m) => new Map(m).set(id, el)),
         (gid: bigint) => setMenu({ gid, ...pointer.current })
       );
+      dockRef.current = live;
       setDock(live);
     });
     return () => {
       gone = true;
+      dockRef.current = undefined;
       live?.unmount();
     };
-  }, [children, gridPos, specs, storageKey]);
+  }, [children, gridPos, specs, storageKey, host, answer]);
 
   useEffect(() => {
     if (dock && titles.size) {
@@ -122,6 +206,7 @@ function DockLayoutRenderer({ model }: SceneComponentProps<DockLayout>) {
   return (
     <div className={styles.wrap} onPointerDownCapture={(e) => (pointer.current = { x: e.clientX, y: e.clientY })}>
       <div ref={root} className={styles.root} />
+      {host && !answer && <div className={styles.waiting}>Waiting for the embedding page…</div>}
       {children.map((p) => {
         const slot = slots.get(p.state.key!);
         return (
@@ -171,5 +256,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     '.tl-grafana-slot': { width: '100%', height: '100%' },
   }),
   root: css({ position: 'absolute', inset: 0 }),
+  waiting: css({ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: theme.colors.text.secondary }),
   fill: css({ width: '100%', height: '100%' }),
 });

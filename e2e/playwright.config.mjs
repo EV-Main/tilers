@@ -12,12 +12,12 @@ export default defineConfig({
 	testDir: '.',
 	use: { baseURL: process.env.TILERS_URL ?? 'http://127.0.0.1:8111/' },
 	projects: [
-		{ name: 'chromium', testIgnore: 'grafana.spec.mjs', use: { ...devices['Desktop Chrome'] } },
-		{ name: 'firefox', testIgnore: 'grafana.spec.mjs', use: { ...devices['Desktop Firefox'] } },
+		{ name: 'chromium', testIgnore: 'grafana*.spec.mjs', use: { ...devices['Desktop Chrome'] } },
+		{ name: 'firefox', testIgnore: 'grafana*.spec.mjs', use: { ...devices['Desktop Firefox'] } },
 		// `nix run .#dev -- grafana`
 		{
 			name: 'grafana',
-			testMatch: 'grafana.spec.mjs',
+			testMatch: 'grafana*.spec.mjs',
 			use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 1000 }, baseURL: process.env.GRAFANA_URL ?? 'http://127.0.0.1:54581/' },
 		},
 	],

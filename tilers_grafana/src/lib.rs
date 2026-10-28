@@ -4,7 +4,11 @@
 //! `VizPanel` into the slot element `on_slot` hands it; everything Grafana-shaped stays on this side
 //! of [`mount`].
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+	collections::{HashMap, HashSet},
+	rc::Rc,
+	sync::Arc,
+};
 
 use js_sys::{Function, Map};
 use leptos::{
@@ -13,7 +17,7 @@ use leptos::{
 	tachys::view::any_view::AnyViewState,
 };
 use send_wrapper::SendWrapper;
-use tilers_leptos::{Config, DockPanel, Group, GroupId, MinSize, PackedApi, PackedArea, PanelId, keys::Keymap};
+use tilers_leptos::{Band, Config, DockPanel, Group, GroupId, MinSize, PackedApi, PackedArea, PanelId, keys::Keymap};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlElement;
 
@@ -105,6 +109,11 @@ impl Dock {
 		self.api().add_tab(GroupId(gid), id);
 	}
 
+	/// Say `text` in the dock's toast: the embedding page reporting how a publish went.
+	pub fn notify(&self, text: String) {
+		self.api().notify(text);
+	}
+
 	/// The view unmounts before its owner disposes the signals it reads.
 	pub fn unmount(self) {
 		let Self { view, owner, .. } = self;
@@ -117,18 +126,33 @@ impl Dock {
 	}
 }
 
-/// `on_slot(id, el)` fires once per panel, when its overlay slot first mounts; that element stays
-/// the panel's for the dock's lifetime. `request_tab(gid)` is the per-tile `+`.
+/// `published` maps a band (`sm`/`md`/`xl`) to a layout JSON an embedding page publishes as that band's
+/// default; `on_publish(band, json)` binds `leader S` when given. `on_slot(id, el)` fires once per panel,
+/// when its overlay slot first mounts; that element stays the panel's for the dock's lifetime.
+/// `request_tab(gid)` is the per-tile `+`. Panels sharing one `gridPos` open as the tabs of one tile.
 #[wasm_bindgen]
-pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, on_slot: Function, request_tab: Function) -> Dock {
+pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, published: Map, on_publish: Option<Function>, on_slot: Function, request_tab: Function) -> Dock {
 	console_error_panic_hook::set_once();
 	let known: HashSet<PanelId> = seeds.iter().map(|s| s.id.clone()).collect();
 	assert!(!seeds.is_empty() && known.len() == seeds.len(), "a dock needs panels, each with its own id");
-	seeds.sort_by_key(|s| (s.y, s.x));
+	seeds.sort_by_key(|s| (s.y, s.x)); // stable: panels sharing a rect keep the dashboard's order
+
+	let published: HashMap<String, String> = ["sm", "md", "xl"]
+		.into_iter()
+		.filter_map(|band| {
+			let layout = published.get(&JsValue::from_str(band));
+			(!layout.is_undefined()).then(|| (band.to_string(), layout.as_string().unwrap_or_else(|| panic!("published[{band:?}] is not a string"))))
+		})
+		.collect();
 
 	let config = Config {
 		row_h_rem: ROW_PITCH_PX / root_font_px(), // a dock row is a Grafana row
 		storage_key: Some(storage_key),
+		on_publish: on_publish.map(|f| {
+			Rc::new(move |band: Band, json: String| {
+				f.call2(&JsValue::NULL, &JsValue::from_str(&band.to_string()), &JsValue::from_str(&json)).expect("on_publish handler threw");
+			}) as Rc<dyn Fn(Band, String)>
+		}),
 		keymap: Keymap {
 			root: vec![], // Grafana's Ctrl+Z is time-range zoom out
 			..Default::default()
@@ -144,18 +168,30 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, on_sl
 		let api = StoredValue::new(None);
 		let on_band: Arc<dyn Fn(PackedApi) + Send + Sync> = Arc::new(move |a: PackedApi| {
 			api.set_value(Some(a));
+			let band = a.band();
+			if !a.restored()
+				&& let Some(json) = published.get(&band.to_string())
+				&& let Err(e) = a.load(json)
+			{
+				web_sys::console::error_1(&format!("tilers_grafana: published layout for {band} did not load ({e:?}); seeding").into());
+			}
 			if a.restored() {
 				let stale: Vec<PanelId> = a.tab_ids().into_iter().filter(|id| !known.contains(id)).collect();
 				if stale.is_empty() {
 					return;
 				}
-				web_sys::console::warn_1(&format!("tilers_grafana: cached layout hosts panels the dashboard no longer has ({stale:?}); re-seeding").into());
+				web_sys::console::warn_1(&format!("tilers_grafana: stored layout hosts panels the dashboard no longer has ({stale:?}); re-seeding").into());
 				a.reset();
 			}
 			let cols = a.cols();
-			for s in &seeds {
-				let w = (s.w as f64 * cols as f64 / GRID_COLUMNS as f64).round() as u32;
-				a.place(Group::new(a.mint_group_id(), s.id.clone()), w, s.h);
+			for run in seeds.chunk_by(|a, b| (a.x, a.y, a.w, a.h) == (b.x, b.y, b.w, b.h)) {
+				let w = (run[0].w as f64 * cols as f64 / GRID_COLUMNS as f64).round() as u32;
+				let group = Group {
+					id: a.mint_group_id(),
+					tabs: run.iter().map(|s| s.id.clone()).collect(),
+					active: 0,
+				};
+				a.place(group, w, run[0].h);
 			}
 		});
 		let request_tab: Arc<dyn Fn(GroupId) + Send + Sync> = Arc::new(move |gid: GroupId| {

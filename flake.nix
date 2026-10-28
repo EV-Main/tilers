@@ -103,6 +103,7 @@
             GF_AUTH_ANONYMOUS_ENABLED=true \
             GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
             GF_AUTH_DISABLE_LOGIN_FORM=true \
+            GF_SECURITY_ALLOW_EMBEDDING=true \
             GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=evmain-tilers-app \
             GF_NEWS_NEWS_FEED_ENABLED=false \
             GF_PLUGINS_PREINSTALL_DISABLED=true \
