@@ -29,6 +29,8 @@ before.
   parent page (the dev Grafana allows embedding): panels sharing a `gridPos` open as tabs; nothing mounts
   before the parent's `host` answer; a published layout opens fresh, the browser's cache beats it;
   `leader S` posts `publish` only if allowed, and a `notify` reply shows in the toast; no flag, no messages.
+- `grafana-drag.spec.mjs` — a native drag from one panel's slot held over an inactive tab of another tile opens it, and
+  that panel's content takes the drop.
 
 ## Run
 

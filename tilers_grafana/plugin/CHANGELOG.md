@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+A native drag entering a tab opens it, so its panel can take the drop. (Listed under 0.4.0, but that
+release was cut without it.)
+
 ## 0.4.0
 
 Panels with the same `gridPos` open as the tabs of one tile, in the dashboard's order, the first active.
@@ -9,8 +14,7 @@ posts the layout back (only if the page allows it), and the page can say a line 
 README.
 Framed in another page, a panel on the right edge of the view, or reaching its bottom, has that grip just
 inside the edge, clear of the frame's own; it only shrinks the panel.
-A native drag entering a tab opens it, so its panel can take the drop. A drag held past or near a
-scroller's edge scrolls it. A tile's header has a rim, with grip dots, that drags the whole tile, and a
+A drag held past or near a scroller's edge scrolls it. A tile's header has a rim, with grip dots, that drags the whole tile, and a
 carried tile's ghost shows its whole tab strip.
 
 ## 0.3.3
