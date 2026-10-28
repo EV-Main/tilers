@@ -582,15 +582,15 @@ impl PackedState {
 				(top.max(0.0), (top + e.client_height() as f64).min(vh))
 			};
 			let (up, down) = (ramp(y - top), ramp(bottom - y));
-			let max = e.scroll_height() - e.client_height();
-			let step = if up >= down && up > 0.0 && e.scroll_top() > 0 {
+			let (at, max) = (e.scroll_top() as f64, (e.scroll_height() - e.client_height()) as f64); // `scroll_top` is `f64` under `web_sys_unstable_apis`
+			let step = if up >= down && up > 0.0 && at > 0.0 {
 				-up.ceil()
-			} else if down > 0.0 && e.scroll_top() < max {
+			} else if down > 0.0 && at < max {
 				down.ceil()
 			} else {
 				continue;
 			};
-			e.set_scroll_top(e.scroll_top() + step as i32);
+			e.scroll_by_with_x_and_y(0.0, step);
 			break;
 		}
 		let r = root.get_bounding_client_rect();
