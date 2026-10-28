@@ -199,7 +199,7 @@
   },
   {
    "id": 9,
-   "dock": { "minH": 82 },
+   "dock": { "minHRem": 5.875 },
    "type": "table",
    "title": "Flux \u00b7 $deployment",
    "gridPos": {
@@ -227,7 +227,7 @@
   },
   {
    "id": 10,
-   "dock": { "minH": 93 },
+   "dock": { "minHRem": 6.625 },
    "type": "table",
    "title": "Release \u00b7 $deployment",
    "gridPos": {

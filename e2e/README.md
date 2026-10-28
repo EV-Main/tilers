@@ -26,7 +26,8 @@ before.
   `npm test -- --project grafana` (`GRAFANA_URL` overrides `http://127.0.0.1:54581`).
 
 - `grafana-host.spec.mjs` — the same project, the plugin framed with `?_tilers.host` by a same-origin
-  parent page (the dev Grafana allows embedding): panels sharing a `gridPos` open as tabs; nothing mounts
+  parent page (the dev Grafana allows embedding): panels sharing a `gridPos` open as tabs; a fresh seed fills the
+  frame's width and height; nothing mounts
   before the parent's `host` answer; a published layout opens fresh, the browser's cache beats it;
   `leader S` posts `publish` only if allowed, and a `notify` reply shows in the toast; no flag, no messages.
 - `grafana-drag.spec.mjs` — a native drag from one panel's slot held over an inactive tab of another tile opens it, and

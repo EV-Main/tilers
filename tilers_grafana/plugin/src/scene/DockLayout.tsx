@@ -6,14 +6,14 @@ import { GridPos } from '@grafana/schema';
 import { LazyLoader, SceneComponentProps, SceneObjectBase, SceneObjectState, VariableDependencyConfig, VizPanel } from '@grafana/scenes';
 import { ContextMenu, Menu, useStyles2 } from '@grafana/ui';
 
-import init, { Dock, mount, Seed } from '../wasm/tilers_grafana';
+import init, { Dock, mount, Seed, Unit } from '../wasm/tilers_grafana';
 import wasm from '../wasm/tilers_grafana_bg.wasm';
 import { cached, compile, Precompile } from './precompile';
 
 const ready = init({ module_or_path: wasm });
 
-/** What a panel's content needs, in CSS px (`0` = nothing beyond the chrome), or a size to compile. */
-export type DockSpec = { minW: number; minH: number } | { precompile: Precompile };
+/** What a panel's content needs, in rem (`0` = nothing beyond the chrome), or a size to compile. */
+export type DockSpec = { minWRem: number; minHRem: number } | { precompile: Precompile };
 
 interface DockLayoutState extends SceneObjectState {
   children: VizPanel[];
@@ -139,8 +139,9 @@ function DockLayoutRenderer({ model }: SceneComponentProps<DockLayout>) {
       const seeds = children.map((p) => {
         const g = gridPos[p.state.key!];
         const spec = specs[p.state.key!];
-        const min = 'precompile' in spec ? (cached(spec.precompile) ?? { w: 0, h: 0 }) : { w: spec.minW, h: spec.minH };
-        return new Seed(p.state.key!, p.state.title, g.x!, g.y!, g.w, g.h, min.w, min.h);
+        const [min, unit] =
+          'precompile' in spec ? [cached(spec.precompile) ?? { w: 0, h: 0 }, Unit.Px] : [{ w: spec.minWRem, h: spec.minHRem }, Unit.Rem];
+        return new Seed(p.state.key!, p.state.title, g.x!, g.y!, g.w, g.h, min.w, min.h, unit);
       });
       live = mount(
         root.current!,

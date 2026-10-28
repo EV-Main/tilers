@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+A fresh layout fills its view. Tiles split the width exactly, so three thirds no longer leave a column
+empty. Panels grow to fill a taller view, and a shorter one still scrolls rather than shrinking them.
+Rows are the dock's own (`2rem`), not Grafana's 38px.
+A panel's `dock` mins are `minWRem`/`minHRem`, in rem, so they track the reader's font; `minW`/`minH`
+(px) are refused. The tile chrome's text and spacing are in rem too.
+
 ## 0.4.1
 
 A native drag entering a tab opens it, so its panel can take the drop. (Listed under 0.4.0, but that

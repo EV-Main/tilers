@@ -1,14 +1,14 @@
 import { expect, test } from '@playwright/test'
 
 // A native (HTML5) drag held over an inactive tab opens it, so that panel's content can take the drop.
-// `tl-fixture-tabs` seeds [Alpha] | [Beta, Gamma]; the drag source and the drop target are test-injected
+// `tl-fixture-tabs` seeds [Alpha] | [Beta, Gamma] | [Delta]; the drag source and the drop target are test-injected
 // into Alpha's and Gamma's slots, as a dynamictext panel's own elements would be.
 
 const DOCK = '/a/evmain-tilers-app/d/tl-fixture-tabs'
 
 test('a native drag over an inactive tab opens it, and its content takes the drop', async ({ page }) => {
 	await page.goto(DOCK)
-	await expect(page.locator('.tl-grafana-slot')).toHaveCount(3, { timeout: 30_000 })
+	await expect(page.locator('.tl-grafana-slot')).toHaveCount(4, { timeout: 30_000 })
 	await page.evaluate(() => {
 		const slot = (id) => document.querySelector(`.tl-grafana-slot[data-panel="panel-${id}"]`)
 		const src = Object.assign(document.createElement('div'), { id: 'src', draggable: true, textContent: 'card' })

@@ -159,7 +159,7 @@ function toPanel(uid: string, p: Panel | RowPanel, reject: Reject): { panel: Viz
 }
 
 /**
- * The panel's `dock` key, outside Grafana's schema: `minW`/`minH` are the CSS px its content needs, or
+ * The panel's `dock` key, outside Grafana's schema: `minWRem`/`minHRem` are the rem its content needs, or
  * `precompile` asks the plugin to measure them once and cache the result.
  */
 function toDock(uid: string, key: string, where: string, panel: Panel & { dock?: unknown }): DockSpec {
@@ -170,26 +170,29 @@ function toDock(uid: string, key: string, where: string, panel: Panel & { dock?:
   if (typeof dock !== 'object' || dock === null || Array.isArray(dock)) {
     return bad(`a non-object (${JSON.stringify(dock)})`);
   }
-  const { minW, minH, precompile, ...rest } = dock as Record<string, unknown>;
+  const { minWRem, minHRem, precompile, ...rest } = dock as Record<string, unknown>;
+  if ('minW' in rest || 'minH' in rest) {
+    bad('minW/minH (px, before 0.5.0) instead of minWRem/minHRem');
+  }
   if (Object.keys(rest).length) {
     bad(`unknown fields ${Object.keys(rest).join(', ')}`);
   }
-  const px = (name: string, v: unknown) => {
+  const rem = (name: string, v: unknown) => {
     if (v === undefined) {
       return 0;
     }
     if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
-      return bad(`${name}=${JSON.stringify(v)}, not a positive px count`);
+      return bad(`${name}=${JSON.stringify(v)}, not a positive rem count`);
     }
     return v;
   };
   if (precompile === undefined) {
-    return { minW: px('minW', minW), minH: px('minH', minH) };
+    return { minWRem: rem('minWRem', minWRem), minHRem: rem('minHRem', minHRem) };
   }
   if (precompile !== true) {
     bad(`precompile=${JSON.stringify(precompile)}, not true`);
   }
-  if (minW !== undefined || minH !== undefined) {
+  if (minWRem !== undefined || minHRem !== undefined) {
     bad('both precompile and an authored min');
   }
   const { gridPos, ...model } = panel;

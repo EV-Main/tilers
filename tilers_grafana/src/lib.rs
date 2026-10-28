@@ -21,12 +21,19 @@ use tilers_leptos::{Band, Config, DockPanel, Group, GroupId, MinSize, PackedApi,
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlElement;
 
-/// Grafana's dashboard grid: 24 columns, 30px rows, 8px between rows.
+/// Grafana's dashboard grid: 24 columns.
 const GRID_COLUMNS: u32 = 24;
-const ROW_PITCH_PX: f64 = 30.0 + 8.0;
 
-/// One panel: its save-model `gridPos`, in Grafana grid units, and the CSS px its content needs
-/// (`0` = nothing beyond the chrome).
+/// What a [`Seed`]'s min is counted in: `Rem` as a dashboard authors it, `Px` as a precompile measures it.
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub enum Unit {
+	Px,
+	Rem,
+}
+
+/// One panel: its save-model `gridPos`, in Grafana grid units, and what its content needs (`0` = nothing
+/// beyond the chrome).
 #[wasm_bindgen]
 pub struct Seed {
 	id: PanelId,
@@ -35,14 +42,13 @@ pub struct Seed {
 	y: u32,
 	w: u32,
 	h: u32,
-	min_w: f64,
-	min_h: f64,
+	min: MinSize,
 }
 
 #[wasm_bindgen]
 impl Seed {
 	#[wasm_bindgen(constructor)]
-	pub fn new(id: String, title: String, x: u32, y: u32, w: u32, h: u32, min_w: f64, min_h: f64) -> Self {
+	pub fn new(id: String, title: String, x: u32, y: u32, w: u32, h: u32, min_w: f64, min_h: f64, unit: Unit) -> Self {
 		assert!(w >= 1 && x + w <= GRID_COLUMNS && h >= 1, "gridPos of {id:?} is off Grafana's grid: x={x} w={w} h={h}");
 		assert!(min_w >= 0.0 && min_h >= 0.0, "min of {id:?} is negative: {min_w}x{min_h}");
 		Self {
@@ -52,8 +58,10 @@ impl Seed {
 			y,
 			w,
 			h,
-			min_w,
-			min_h,
+			min: match unit {
+				Unit::Px => MinSize::Px { w: min_w, h: min_h },
+				Unit::Rem => MinSize::Rem { w: min_w, h: min_h },
+			},
 		}
 	}
 }
@@ -146,11 +154,11 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, publi
 		.collect();
 
 	let config = Config {
-		row_h_rem: ROW_PITCH_PX / root_font_px(), // a dock row is a Grafana row
 		storage_key: Some(storage_key),
 		on_publish: on_publish.map(|f| {
 			Rc::new(move |band: Band, json: String| {
-				f.call2(&JsValue::NULL, &JsValue::from_str(&band.to_string()), &JsValue::from_str(&json)).expect("on_publish handler threw");
+				f.call2(&JsValue::NULL, &JsValue::from_str(&band.to_string()), &JsValue::from_str(&json))
+					.expect("on_publish handler threw");
 			}) as Rc<dyn Fn(Band, String)>
 		}),
 		keymap: Keymap {
@@ -183,15 +191,21 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, publi
 				web_sys::console::warn_1(&format!("tilers_grafana: stored layout hosts panels the dashboard no longer has ({stale:?}); re-seeding").into());
 				a.reset();
 			}
-			let cols = a.cols();
+			let depth = seeds.iter().map(|s| s.y + s.h).max().expect("a dock has panels");
+			let (cols, rows) = (a.cols(), a.rows().max(depth)); // a short view scrolls rather than shrinks
+			// edges, not lengths, are scaled, so neighbours meet and the last reaches the view's edge
+			let span = |at: u32, len: u32, of: u32, steps: u32| {
+				let edge = |e: u32| (e as f64 * steps as f64 / of as f64).round() as u32;
+				(edge(at + len) - edge(at)).max(1)
+			};
 			for run in seeds.chunk_by(|a, b| (a.x, a.y, a.w, a.h) == (b.x, b.y, b.w, b.h)) {
-				let w = (run[0].w as f64 * cols as f64 / GRID_COLUMNS as f64).round() as u32;
+				let s = &run[0];
 				let group = Group {
 					id: a.mint_group_id(),
 					tabs: run.iter().map(|s| s.id.clone()).collect(),
 					active: 0,
 				};
-				a.place(group, w, run[0].h);
+				a.place(group, span(s.x, s.w, GRID_COLUMNS, cols), span(s.y, s.h, depth, rows));
 			}
 		});
 		let request_tab: Arc<dyn Fn(GroupId) + Send + Sync> = Arc::new(move |gid: GroupId| {
@@ -212,7 +226,7 @@ fn slot(seed: &Seed, on_slot: &SendWrapper<Function>) -> DockPanel {
 	DockPanel {
 		id: seed.id.clone(),
 		title: seed.title.clone(),
-		min: MinSize::Px { w: seed.min_w, h: seed.min_h },
+		min: seed.min,
 		content: Arc::new(move || {
 			let node = NodeRef::<leptos::html::Div>::new();
 			let (id, on_slot) = (id.clone(), on_slot.clone());
@@ -223,17 +237,4 @@ fn slot(seed: &Seed, on_slot: &SendWrapper<Function>) -> DockPanel {
 			view! { <div class="tl-grafana-slot" data-panel=key node_ref=node></div> }.into_any()
 		}),
 	}
-}
-
-fn root_font_px() -> f64 {
-	let win = web_sys::window().expect("the plugin runs in Grafana's page");
-	let root = win.document().expect("a page has a document").document_element().expect("a document has a root");
-	win.get_computed_style(&root)
-		.expect("our own root is never cross-origin")
-		.expect("a rendered root has a computed style")
-		.get_property_value("font-size")
-		.expect("reading a property never throws")
-		.trim_end_matches("px")
-		.parse()
-		.expect("a computed font-size is in px")
 }

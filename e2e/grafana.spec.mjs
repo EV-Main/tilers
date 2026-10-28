@@ -10,7 +10,7 @@ const DOCK = 'a/evmain-tilers-app/d/tl-fixture'
 const PANELS = 9
 const FIXTURE = JSON.parse(readFileSync(new URL('../tilers_grafana/plugin/provisioning/fixtures/tl-fixture.json', import.meta.url)))
 /** Panel ids by their `dock` key. */
-const AUTHORED = FIXTURE.panels.filter((p) => p.dock?.minH).map((p) => [p.id, p.dock.minH])
+const AUTHORED = FIXTURE.panels.filter((p) => p.dock?.minHRem).map((p) => [p.id, p.dock.minHRem])
 const COMPILED = FIXTURE.panels.filter((p) => p.dock?.precompile).map((p) => p.id)
 const compiled = (page, id) =>
 	page.waitForFunction((k) => JSON.parse(localStorage.getItem(k) ?? 'null'), `dv-grafana-min-tl-fixture-panel-${id}`, { timeout: 30_000 }).then((h) => h.jsonValue())
@@ -177,8 +177,9 @@ test('declared and compiled mins hold when the window halves', async ({ page }) 
 	}
 	await page.setViewportSize({ width: 1600, height: 500 })
 	const slotH = (id) => page.$eval(`.tl-grafana-slot[data-panel="panel-${id}"]`, (s) => s.clientHeight)
-	for (const [id, minH] of AUTHORED) {
-		await expect.poll(() => slotH(id), `panel ${id} keeps its ${minH}px`).toBeGreaterThanOrEqual(minH)
+	const rem = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))
+	for (const [id, minHRem] of AUTHORED) {
+		await expect.poll(() => slotH(id), `panel ${id} keeps its ${minHRem}rem`).toBeGreaterThanOrEqual(minHRem * rem)
 	}
 	for (const [i, id] of COMPILED.entries()) {
 		await expect.poll(() => slotH(id), `panel ${id} keeps its compiled ${sizes[i].h}px`).toBeGreaterThanOrEqual(sizes[i].h)

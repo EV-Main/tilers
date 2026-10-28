@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test'
 
 // The plugin framed by an embedding page (`?_tilers.host`) over `nix run .#dev -- grafana`, which
 // allows embedding. The parent is a same-origin page served by `page.route`; it records what the
-// frame posts and answers per `cfg`. `tl-fixture-tabs` seeds [Alpha] | [Beta, Gamma]: the last two
-// share one `gridPos`.
+// frame posts and answers per `cfg`. `tl-fixture-tabs` seeds [Alpha] | [Beta, Gamma] | [Delta], each a third of
+// Grafana's width: Beta and Gamma share one `gridPos`.
 
 const DOCK = '/a/evmain-tilers-app/d/tl-fixture-tabs'
 const PARENT = `<body style="margin:0"><iframe id="f" style="width:1500px;height:900px;border:0"></iframe><script>
@@ -31,8 +31,8 @@ const frame = async (page, src, cfg = {}) => {
 const received = (page) => page.evaluate(() => window.received)
 const tiles = (f) => f.locator('.tl-tile')
 const seeded = async (f) => {
-	await expect(f.locator('.tl-grafana-slot')).toHaveCount(3, { timeout: 30_000 })
-	await expect(tiles(f)).toHaveCount(2)
+	await expect(f.locator('.tl-grafana-slot')).toHaveCount(4, { timeout: 30_000 })
+	await expect(tiles(f)).toHaveCount(3)
 }
 const tab = (f, title) => f.locator('.tl-tab', { hasText: new RegExp(`^${title}$`) })
 const overlay = (f, id) => f.locator(`.tl-render-overlay:has(> .tl-grafana-slot[data-panel="panel-${id}"])`)
@@ -47,14 +47,14 @@ const layoutOf = async (browser) => {
 	const ctx = await browser.newContext({ baseURL: test.info().project.use.baseURL, viewport: { width: 1600, height: 1000 } })
 	const page = await ctx.newPage()
 	await page.goto(DOCK)
-	await expect(page.locator('.tl-grafana-slot')).toHaveCount(3, { timeout: 30_000 })
+	await expect(page.locator('.tl-grafana-slot')).toHaveCount(4, { timeout: 30_000 })
 	const src = await tab(page, 'Alpha').boundingBox()
 	const dst = await tab(page, 'Gamma').boundingBox()
 	await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2)
 	await page.mouse.down()
 	await page.mouse.move(dst.x + dst.width + 30, dst.y + dst.height / 2, { steps: 12 })
 	await page.mouse.up()
-	await expect(page.locator('.tl-tile')).toHaveCount(1)
+	await expect(page.locator('.tl-tile')).toHaveCount(2)
 	await page.keyboard.press('Alt+z')
 	await page.keyboard.press('s')
 	const json = await page.evaluate(() => localStorage.getItem('dv-grafana-tl-fixture-tabs-xl'))
@@ -65,12 +65,31 @@ const layoutOf = async (browser) => {
 
 test('panels sharing a gridPos open as the tabs of one tile, the first active', async ({ page }) => {
 	await page.goto(DOCK)
-	await expect(page.locator('.tl-grafana-slot')).toHaveCount(3, { timeout: 30_000 })
-	await expect(page.locator('.tl-tile')).toHaveCount(2)
+	await expect(page.locator('.tl-grafana-slot')).toHaveCount(4, { timeout: 30_000 })
+	await expect(page.locator('.tl-tile')).toHaveCount(3)
 	const shared = page.locator('.tl-header', { has: tab(page, 'Beta') })
 	await expect(shared.locator('.tl-tab')).toHaveText(['Beta', 'Gamma'])
 	await expect(overlay(page, 2)).toBeVisible()
 	await expect(overlay(page, 3)).toBeHidden()
+})
+
+test('a fresh seed fills the frame: tiles meet its right edge, and end less than a row above its bottom', async ({ page }) => {
+	const f = await frame(page, `${DOCK}?_tilers.host`, { onReady: HOST() })
+	await seeded(f)
+	const { width, height, right, bottom, row } = await f.locator('.tl-packed').evaluate((root) => {
+		const o = root.getBoundingClientRect()
+		const rs = [...root.querySelectorAll('.tl-tile')].map((t) => t.getBoundingClientRect())
+		return {
+			width: root.clientWidth,
+			height: root.clientHeight,
+			right: Math.max(...rs.map((r) => r.right - o.left)),
+			bottom: Math.max(...rs.map((r) => r.bottom - o.top)),
+			row: 2 * parseFloat(getComputedStyle(document.documentElement).fontSize), // `Config::row_h_rem`'s default
+		}
+	})
+	expect(right).toBeCloseTo(width, 0)
+	expect(height - bottom).toBeGreaterThanOrEqual(0)
+	expect(height - bottom).toBeLessThan(row)
 })
 
 test('nothing mounts before the parent answers; an empty answer seeds', async ({ page }) => {
@@ -85,9 +104,9 @@ test('nothing mounts before the parent answers; an empty answer seeds', async ({
 test('a fresh browser opens the published layout', async ({ page, browser }) => {
 	const layout = await layoutOf(browser)
 	const f = await frame(page, `${DOCK}?_tilers.host`, { onReady: HOST({ xl: layout }) })
-	await expect(f.locator('.tl-grafana-slot')).toHaveCount(3, { timeout: 30_000 })
-	await expect(tiles(f)).toHaveCount(1)
-	await expect(f.locator('.tl-tab')).toHaveText(['Beta', 'Gamma', 'Alpha'])
+	await expect(f.locator('.tl-grafana-slot')).toHaveCount(4, { timeout: 30_000 })
+	await expect(tiles(f)).toHaveCount(2)
+	await expect(f.locator('.tl-tab')).toHaveText(['Beta', 'Gamma', 'Alpha', 'Delta'])
 })
 
 test('the browser\'s own cache beats the published layout', async ({ page, browser }) => {

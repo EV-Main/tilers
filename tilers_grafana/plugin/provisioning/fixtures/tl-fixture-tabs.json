@@ -10,7 +10,7 @@
    "id": 1,
    "type": "timeseries",
    "title": "Alpha",
-   "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+   "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
    "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" },
    "targets": [{ "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" }, "refId": "A", "scenarioId": "random_walk", "alias": "q-1" }]
   },
@@ -18,7 +18,7 @@
    "id": 2,
    "type": "timeseries",
    "title": "Beta",
-   "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+   "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
    "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" },
    "targets": [{ "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" }, "refId": "A", "scenarioId": "random_walk", "alias": "q-2" }]
   },
@@ -26,9 +26,17 @@
    "id": 3,
    "type": "timeseries",
    "title": "Gamma",
-   "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+   "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
    "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" },
    "targets": [{ "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" }, "refId": "A", "scenarioId": "random_walk", "alias": "q-3" }]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Delta",
+   "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+   "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" },
+   "targets": [{ "datasource": { "type": "grafana-testdata-datasource", "uid": "testdata" }, "refId": "A", "scenarioId": "random_walk", "alias": "q-4" }]
   }
  ]
 }
