@@ -14,7 +14,7 @@ use tilers_core::{
 fn seq(s: &str) -> Vec<KeyInput> {
 	s.split_whitespace()
 		.map(|tok| {
-			let (editable, tok) = tok.strip_prefix('!').map_or((false, tok), |t| (true, t));
+			let (editable, tok) = tok.strip_prefix('!').map_or((Some(false), tok), |t| (Some(true), t));
 			let mut parts: Vec<&str> = tok.split('+').collect();
 			let key = parts.pop().expect("split yields at least one part");
 			let has = |m: &str| parts.contains(&m);

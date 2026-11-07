@@ -197,7 +197,7 @@ impl PackedState {
 			self.grid = self.resize.take().expect("matched above").press;
 			return;
 		};
-		let (sw, sh) = self.step();
+		let (sw, sh) = (self.step().0, r.row);
 		let shift = |at: u32, from: f64, to: f64, step: f64| (at as i64 + ((to - from) / step).round() as i64).max(0) as u32;
 		let c = &r.press.cells[idx];
 		let (mut left, mut right, mut h) = (c.x, c.x + c.w, c.h);
@@ -363,6 +363,7 @@ impl PackedState {
 		if let Some(c) = self.drag.as_ref().map(|d| d.cursor) {
 			self.drag_move(c); // the cursor now sits over other content
 		}
+		self.follow(); // a Fold grip reads the row under the cursor
 	}
 
 	/// Whether [`capture_undo`](Self::capture_undo) would actually push. A binding that captures via
@@ -540,11 +541,12 @@ impl PackedState {
 	/// A native drag (a host's card, a file) entered a tab: open it, so its content can take the drop.
 	/// A tab gone since the event was queued is ignored.
 	pub fn drag_enter_tab(&mut self, gid: GroupId, panel: &PanelId) {
-		if let Some(c) = self.grid.cells.iter_mut().find(|c| c.group.id == gid)
+		if let Some(c) = self.base().cells.iter_mut().find(|c| c.group.id == gid)
 			&& let Some(i) = c.group.tabs.iter().position(|p| p == panel)
 		{
 			c.group.active = i;
 		}
+		self.follow();
 	}
 
 	pub fn drag_cancel(&mut self) {
@@ -620,12 +622,14 @@ impl PackedState {
 		}
 		self.resize_end(); // a second pointer on another grip: the first gesture ends where it is
 		assert!(grip != Grip::Left || self.grid.free_left(idx), "a left grip on a boundary: bindings render `Frame::grips`");
+		let row = self.step().1;
 		self.resize = Some(ResizeStart {
 			gid: self.grid.cells[idx].group.id,
 			grip,
 			press: self.grid.clone(),
 			press_at: (px, py),
 			cursor: (px, py),
+			row,
 		});
 		self.grid.state = GridState::Resizing;
 	}
@@ -699,7 +703,11 @@ impl PackedState {
 
 	/// One keydown. Esc is hard-wired: it closes the help, the inspect popups and a pending chord.
 	pub fn on_key(&mut self, k: KeyInput) -> KeyOutcome {
-		if k.normalized().as_deref() == Some("Escape") && !k.editable && !k.composing && (self.help || !self.popups.is_empty()) {
+		if k.normalized().as_deref() == Some("Escape")
+			&& !k.editable.expect("a host listens on a browser window, whose keydowns know their target")
+			&& !k.composing
+			&& (self.help || !self.popups.is_empty())
+		{
 			self.help = false;
 			self.popups.clear();
 			self.keys.cancel();
@@ -1229,6 +1237,8 @@ struct ResizeStart {
 	press: PackedGrid,
 	press_at: (f64, f64),
 	cursor: (f64, f64),
+	/// The row px at the press: a view-height change mid-gesture restretches rows, never the rows dragged.
+	row: f64,
 }
 
 /// Linear undo history of settled layouts with a cursor into it. `push` appends a fresh edit,

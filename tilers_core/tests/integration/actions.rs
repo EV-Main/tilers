@@ -117,7 +117,7 @@ pub enum Aim {
 
 /// An unbound key or an editable target: either cancels whatever the sequence had opened.
 pub fn noisy(inputs: &[KeyInput]) -> bool {
-	inputs.iter().any(|k| k.editable || k.key == "j")
+	inputs.iter().any(|k| k.editable == Some(true) || k.normalized().as_deref() == Some("j"))
 }
 /// Apply `action`, returning the invariant it violated. Several invariants are only expressible
 /// *around* an action (a cancel is a no-op, an unarmed release only activates), so they live here
@@ -366,7 +366,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			}
 			if frng.below(6) == 0 {
 				let i = frng.below(inputs.len() as u32) as usize;
-				inputs[i].editable = true;
+				inputs[i].editable = Some(true);
 			}
 			// A Cyrillic layout: a letter key sends a non-Latin `key`, and the library reads its `code`.
 			if frng.below(6) == 0 {
@@ -449,7 +449,7 @@ fn input(c: Chord) -> KeyInput {
 		shift: c.key == "?" || single.is_some_and(|ch| ch.is_ascii_uppercase()),
 		repeat: false,
 		composing: false,
-		editable: false,
+		editable: Some(false),
 	}
 }
 
@@ -590,7 +590,7 @@ fn key(inputs: &[KeyInput], aim: Aim, world: &mut World) -> Result<(), String> {
 		let out = world.state.on_key(k.clone());
 		let now = seen(&world.state);
 		// Only the pending chord (the hint) may move: text undo and typing stay the browser's.
-		if k.editable && (out.prevent_default || now.grid != was.grid || now.help != was.help || now.inspect != was.inspect || now.frames != was.frames) {
+		if k.editable == Some(true) && (out.prevent_default || now.grid != was.grid || now.help != was.help || now.inspect != was.inspect || now.frames != was.frames) {
 			return Err(format!("{k:?} aimed at an editable acted: {out:?}"));
 		}
 		// A binding re-renders only on `changed`, so anything else that moved is a stale screen.
