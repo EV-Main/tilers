@@ -12,7 +12,7 @@ primitives. The binding does the DOM read and passes numbers and strings in; it 
 back plain view-model data (`frames`, `content_slots`, `ghost`) with inline styles
 already computed, which a template renders 1:1. Keyboard input is the exception: decoding a
 `KeyboardEvent` (`KeyInput: From<&KeyboardEvent>`, the editable check) and detecting the platform
-live in core, so the two bindings can't diverge on what a keystroke is.
+live in `ev_lib::keymap`, so the two bindings can't diverge on what a keystroke is.
 
 So the whole gesture machine — drag, resize, undo, refit, keybinds, the seed cache —
 is ordinary Rust, testable without a DOM, and shared verbatim by both bindings. A
@@ -48,8 +48,9 @@ flowchart LR
 - `state` — the reducer over `PackedState`: gestures, undo history, `on_key` and command
   dispatch, the measure/refit path, the view-model getters (incl. `hint`/`help`), and the
   **band latch** (below).
-- `keys` — `Keymap` (leader, scope, root) of `Binding`s, its per-platform resolution into a
-  chord trie, and `KeyInput` normalization (the `key` sent, case from Shift alone).
+- `keys` — tilers' `Command`s (`Builtin` + host `Custom`) and the default keymap over
+  `ev_lib::keymap`: a root of undo/redo chords plus the leader as a root scope. Keymap, trie,
+  `KeyInput` normalization and rendering are the library's; `keys` re-exports what hosts name.
 - `config` — `Config` (steps/row height/keymap/storage key/publish hook),
   `Breakpoint` (5 widths, sets the column count) and `Band` (3 widths, the persistence
   key).
@@ -65,7 +66,7 @@ a tab it enters (`drag_enter_tab`), and the drop stays the content's.
 `tilers_grafana` is a *host* of the Leptos binding, not a third binding: a Grafana app
 plugin (`plugin/`, TS + `@grafana/scenes`) whose wasm half mounts `PackedArea` with one bare slot
 per panel, and the plugin portals each panel's native `VizPanel` into its slot. Everything
-Grafana-shaped — the save-model conversion, the `gridPos` seed, an empty `Keymap::root` (Grafana owns Ctrl+Z) —
+Grafana-shaped — the save-model conversion, the `gridPos` seed, a `Keymap::root` holding only the leader scope (Grafana owns Ctrl+Z) —
 stays inside that crate. It is released as a plugin zip on `grafana-v*` tags, not to crates.io.
 
 ## The seed cache
@@ -124,13 +125,11 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   never stored as layout.
 - A cached layout that is corrupt, from a future schema, or empty is a **miss** that says
   so on the console — never a silent wipe.
-- The framework's global key footprint is exactly `Keymap::root` ∪ {leader} ∪ {Esc while the
-  help, an inspect popup or a chord is open}. Everything else waits behind the leader.
-- A key aimed at an editable never acts, so text undo and typing stay native.
-- A bind matches the `key` the user's layout produced, never the physical `code`: the layout is
-  unknowable from the page, so reading a position as a letter assumes one (qwerty) and binds a key
-  other than the one the user pressed. A layout that sends no bound key (Cyrillic, macOS Option's
-  `†`) acts on nothing; a host wanting it binds those keys too.
+- The framework's global key footprint is exactly `Keymap::root` (the leader being a root scope) ∪
+  {Esc while the help, an inspect popup or a chord is open}. Everything else waits behind the leader.
+- A key aimed at an editable never acts, so text undo and typing stay native; that rule and the
+  footprint's are the library's: `~/s/ev/web_std/docs/ARCHITECTURE.md`, "The `keymap` library".
+- Which key a keydown is, across layouts, is the library's rule (same section), not tilers'.
 - The reducer is time-free; any delay (the which-key reveal) is presentation, in CSS; any cadence
   (drag autoscroll) is the binding's frame loop, stepping the reducer once per frame.
 

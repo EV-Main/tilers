@@ -470,7 +470,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 						if let Some(p) = help.pane {
 							div { class: "tl-help-pane", {p} }
 						}
-						for (chord, label) in help.rows {
+						for tilers_core::keys::HelpRow { sequence: chord, label } in help.rows {
 							div { class: "tl-help-row",
 								span { class: "tl-help-label", {label} }
 								span { class: "tl-help-key", {chord} }

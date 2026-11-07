@@ -49,8 +49,11 @@ pub struct Seed {
 impl Seed {
 	#[wasm_bindgen(constructor)]
 	pub fn new(id: String, title: String, x: u32, y: u32, w: u32, h: u32, min_w: f64, min_h: f64, unit: Unit) -> Self {
-		assert!(w >= 1 && x + w <= GRID_COLUMNS && h >= 1, "gridPos of {id:?} is off Grafana's grid: x={x} w={w} h={h}");
-		assert!(min_w >= 0.0 && min_h >= 0.0, "min of {id:?} is negative: {min_w}x{min_h}");
+		assert!(w >= 1, "gridPos of {id:?} is off Grafana's grid: x={x} w={w} h={h}");
+		assert!(x + w <= GRID_COLUMNS, "gridPos of {id:?} is off Grafana's grid: x={x} w={w} h={h}");
+		assert!(h >= 1, "gridPos of {id:?} is off Grafana's grid: x={x} w={w} h={h}");
+		assert!(min_w >= 0.0, "min of {id:?} is negative: {min_w}x{min_h}");
+		assert!(min_h >= 0.0, "min of {id:?} is negative: {min_w}x{min_h}");
 		Self {
 			id: PanelId(id),
 			title,
@@ -92,7 +95,8 @@ impl Dock {
 
 	/// Re-declare what `id`'s content needs, in CSS px — a compiled size landing after mount.
 	pub fn set_min(&self, id: String, w: f64, h: f64) {
-		assert!(w >= 0.0 && h >= 0.0, "min of {id:?} is negative: {w}x{h}");
+		assert!(w >= 0.0, "min of {id:?} is negative: {w}x{h}");
+		assert!(h >= 0.0, "min of {id:?} is negative: {w}x{h}");
 		let id = PanelId(id);
 		let min = MinSize::Px { w, h };
 		let i = self
@@ -142,7 +146,8 @@ impl Dock {
 pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, published: Map, on_publish: Option<Function>, on_slot: Function, request_tab: Function) -> Dock {
 	console_error_panic_hook::set_once();
 	let known: HashSet<PanelId> = seeds.iter().map(|s| s.id.clone()).collect();
-	assert!(!seeds.is_empty() && known.len() == seeds.len(), "a dock needs panels, each with its own id");
+	assert!(!seeds.is_empty(), "a dock needs panels, each with its own id");
+	assert!(known.len() == seeds.len(), "a dock needs panels, each with its own id");
 	seeds.sort_by_key(|s| (s.y, s.x)); // stable: panels sharing a rect keep the dashboard's order
 
 	let published: HashMap<String, String> = ["sm", "md", "xl"]
@@ -162,8 +167,7 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, publi
 			}) as Rc<dyn Fn(Band, String)>
 		}),
 		keymap: Keymap {
-			root: vec![], // Grafana's Ctrl+Z is time-range zoom out
-			..Default::default()
+			root: Config::default().keymap.root.into_iter().take(1).collect(), // the leader is first; Grafana's Ctrl+Z is time-range zoom out
 		},
 		..Default::default()
 	};

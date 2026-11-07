@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::keys::Keymap;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Config {
 	pub keymap: Keymap,
 	/// Desktop (`Xl`) column count: how many grid steps span the container's width on a wide screen.
@@ -30,6 +30,15 @@ pub struct Config {
 	/// Emitted as `--tl-title-h` on the root and resolved to px for the content overlay's offset.
 	/// The corner resize handle is pinned to half of it.
 	pub title_h_rem: f64 = 2.0,
+}
+
+impl Default for Config {
+	fn default() -> Self {
+		Self {
+			keymap: crate::keys::default_keymap(),
+			..
+		}
+	}
 }
 
 /// Config never changes at runtime; a binding compares it only to decide whether to re-seed.

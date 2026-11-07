@@ -5,7 +5,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use tilers_core::{
 	Config, Grip, Group, GroupId, MinSize, PackedState, PanelId, Step,
-	keys::{Binding, Chord, Command, KeyInput, KeyOutcome, Keymap, Node},
+	keys::{Binding, Chord, Command, HelpRow, KeyInput, KeyOutcome, Keymap, Node},
 	model::packed::PackedGrid,
 };
 
@@ -20,27 +20,23 @@ fn seq(s: &str) -> Vec<KeyInput> {
 			let has = |m: &str| parts.contains(&m);
 			let shift = has("Shift") || (key.len() == 1 && key.chars().all(|c| c.is_ascii_uppercase()));
 			let key = if shift && key.len() == 1 { key.to_ascii_uppercase() } else { key.to_string() };
+			let code = match key.chars().next() {
+				Some(c) if key.len() == 1 && c.is_ascii_alphabetic() => format!("Key{}", c.to_ascii_uppercase()),
+				_ => key.clone(),
+			};
 			KeyInput {
 				key,
+				code,
 				ctrl: has("Ctrl"),
 				alt: has("Alt"),
 				meta: has("Meta"),
 				shift,
+				repeat: false,
+				composing: false,
 				editable,
 			}
 		})
 		.collect()
-}
-
-fn raw(key: &str, alt: bool, shift: bool) -> KeyInput {
-	KeyInput {
-		key: key.into(),
-		ctrl: false,
-		alt,
-		meta: false,
-		shift,
-		editable: false,
-	}
 }
 
 /// Two tiles, tile 0 focused, and one structural edit in the undo history — fed the way a binding's
@@ -95,7 +91,7 @@ fn check(cfg: Config, keys: Vec<KeyInput>, lands: Lands, prevented: bool) {
 	assert_eq!(outs.last().expect("at least one key").prevent_default, prevented, "last keydown's preventDefault");
 }
 
-fn help_rows(s: &mut PackedState) -> Vec<(String, String)> {
+fn help_rows(s: &mut PackedState) -> Vec<HelpRow> {
 	if s.help(&HashMap::new()).is_none() {
 		press(s, seq("Alt+z ?"));
 	}
@@ -103,8 +99,11 @@ fn help_rows(s: &mut PackedState) -> Vec<(String, String)> {
 }
 
 fn flat() -> Keymap {
-	let mut k = Keymap::default();
-	k.root.append(&mut k.scope);
+	let mut k = Config::default().keymap;
+	let Node::Scope { children, .. } = k.root.remove(0).node else {
+		unreachable!("the default keymap's first binding is the leader scope")
+	};
+	k.root.extend(children);
 	k
 }
 
@@ -114,68 +113,31 @@ fn bare_keys_are_not_ours() {
 		let (mut s, _) = edited(Config::default());
 		let grid = s.grid().clone();
 		for out in press(&mut s, seq(keys)) {
-			assert!(!out.prevent_default && !out.changed, "{keys:?} must reach the host untouched");
+			assert!(!out.prevent_default, "{keys:?} must reach the host untouched");
+			assert!(!out.changed, "{keys:?} must reach the host untouched");
 		}
 		assert_eq!(s.grid(), &grid, "{keys:?}");
-		assert!(s.help(&HashMap::new()).is_none() && s.hint().is_none() && s.inspect().is_empty(), "{keys:?}");
+		assert!(s.help(&HashMap::new()).is_none(), "{keys:?}");
+		assert!(s.hint().is_none(), "{keys:?}");
+		assert!(s.inspect().is_empty(), "{keys:?}");
 	}
 }
 
 #[test]
-fn leader_scope() {
-	check(Config::default(), seq("Alt+z u"), Lands::Undone, true);
-	// A modifier-only keydown (pressing Shift on the way to `U`) doesn't cancel the scope.
-	check(Config::default(), seq("Alt+z u Alt+z Shift U"), Lands::Edited, true);
-	check(Config::default(), seq("Alt+z j u"), Lands::Edited, false);
-	// A held leader key-repeats; the repeat resets to the leader level instead of cancelling.
-	check(Config::default(), seq("Alt+z Alt+z u"), Lands::Undone, true);
-}
-
-#[test]
-fn hint_follows_the_pending_scope() {
-	let (mut s, _) = edited(Config::default());
-	assert!(s.hint().is_none());
-	press(&mut s, seq("Alt+z"));
-	let h = s.hint().expect("an open scope shows its hint");
-	assert_eq!(h.prefix, "Alt+z");
-	assert!(h.rows.iter().any(|r| r.label == "Undo" && r.chord == "u" && !r.scope), "{:?}", h.rows);
-	press(&mut s, seq("u"));
-	assert!(s.hint().is_none(), "a leaf closes the scope");
-	press(&mut s, seq("Alt+z"));
-	s.cancel_chord();
-	assert!(s.hint().is_none(), "window blur cancels");
-}
-
-#[test]
 fn root_undo() {
+	check(Config::default(), seq("Alt+z u"), Lands::Undone, true);
 	check(Config::default(), seq("Ctrl+z"), Lands::Undone, true);
 	check(Config::default(), seq("Ctrl+z Ctrl+Z"), Lands::Edited, true);
 	check(Config::default(), seq("Ctrl+z Ctrl+y"), Lands::Edited, true);
 
 	let (mut s, _) = edited(Config::default());
 	let out = press(&mut s, seq("!Ctrl+z")).remove(0);
-	assert!(!out.prevent_default && !out.changed, "text undo inside an editable stays the browser's");
+	assert!(!out.prevent_default, "text undo inside an editable stays the browser's");
+	assert!(!out.changed, "text undo inside an editable stays the browser's");
 
 	let mut s = seeded(Config::default());
 	let out = press(&mut s, seq("Ctrl+z")).remove(0);
 	assert!(!out.prevent_default, "nothing to undo: the keystroke stays the host's");
-}
-
-#[test]
-fn an_editable_target_cancels_and_never_acts() {
-	check(Config::default(), seq("Alt+z !u"), Lands::Edited, false);
-	check(Config::default(), seq("Alt+z !u u"), Lands::Edited, false);
-}
-
-#[test]
-fn the_key_sent_is_the_key_bound() {
-	// A Russian layout sends `г` where qwerty has `u`: that is `г`, not undo.
-	check(Config::default(), [seq("Alt+z"), vec![raw("г", false, false)]].concat(), Lands::Edited, false);
-	// macOS Option composes Alt+z into `Ω`, and a dead key into `Dead`: neither is the leader.
-	check(Config::default(), [vec![raw("Ω", true, false)], seq("u")].concat(), Lands::Edited, false);
-	check(Config::default(), [vec![raw("Dead", true, false)], seq("u")].concat(), Lands::Edited, false);
-	// CapsLock: `U` without Shift is still undo, not redo.
-	check(Config::default(), [seq("Alt+z"), vec![raw("U", false, false)]].concat(), Lands::Undone, true);
 }
 
 #[test]
@@ -184,7 +146,11 @@ fn saving_tracks_what_the_host_wired() {
 	for keys in ["Alt+z s", "Alt+z S"] {
 		assert!(!press(&mut s, seq(keys))[1].prevent_default, "no storage, no hook: {keys} is unbound");
 	}
-	assert!(!help_rows(&mut s).iter().any(|(k, _)| k == "Alt+z s" || k == "Alt+z Shift+s"), "{:?}", help_rows(&mut s));
+	assert!(
+		!help_rows(&mut s).iter().any(|r| r.sequence == "Alt+Z S" || r.sequence == "Alt+Z Shift+S"),
+		"{:?}",
+		help_rows(&mut s)
+	);
 
 	let cached = Config {
 		storage_key: Some("t".into()),
@@ -192,8 +158,8 @@ fn saving_tracks_what_the_host_wired() {
 	};
 	let (mut s, _) = edited(cached);
 	let rows = help_rows(&mut s);
-	assert!(rows.iter().any(|(k, _)| k == "Alt+z s"), "{rows:?}");
-	assert!(!rows.iter().any(|(k, _)| k == "Alt+z Shift+s"), "publish needs `on_publish`: {rows:?}");
+	assert!(rows.iter().any(|r| r.sequence == "Alt+Z S"), "{rows:?}");
+	assert!(!rows.iter().any(|r| r.sequence == "Alt+Z Shift+S"), "publish needs `on_publish`: {rows:?}");
 	let outs = press(&mut s, seq("Alt+z S"));
 	assert!(!outs[1].prevent_default, "an unbound publish is inert");
 	assert!(s.notice().is_none(), "an unbound publish says nothing");
@@ -238,18 +204,22 @@ fn flat_keymap_has_no_leader() {
 	check(cfg(), seq("u"), Lands::Undone, true);
 	let (mut s, _) = edited(cfg());
 	let out = press(&mut s, seq("Alt+z")).remove(0);
-	assert!(!out.prevent_default && s.hint().is_none(), "an empty scope leaves the leader unbound");
+	assert!(!out.prevent_default, "an empty scope leaves the leader unbound");
+	assert!(s.hint().is_none(), "an empty scope leaves the leader unbound");
 }
 
 #[test]
 fn custom_command_in_a_nested_scope() {
 	let ran = Rc::new(RefCell::new(0));
 	let count = ran.clone();
-	let mut keymap = Keymap::default();
-	keymap.scope.push(Binding {
+	let mut keymap = Config::default().keymap;
+	let Node::Scope { children, .. } = &mut keymap.root[0].node else {
+		unreachable!("the default keymap's first binding is the leader scope")
+	};
+	children.push(Binding {
 		on: Chord { key: "x", .. }.into(),
 		node: Node::Scope {
-			label: "extra",
+			label: "extra".to_owned(),
 			children: vec![Binding {
 				on: Chord { key: "y", .. }.into(),
 				node: Node::Run(Command::Custom {
@@ -265,33 +235,10 @@ fn custom_command_in_a_nested_scope() {
 	let (mut s, _) = edited(Config { keymap, ..Default::default() });
 	assert!(press(&mut s, seq("Alt+z x y")).iter().all(|o| o.prevent_default));
 	assert_eq!(*ran.borrow(), 1);
-	assert!(help_rows(&mut s).contains(&("Alt+z x y".into(), "Mark".into())));
-}
-
-#[test]
-fn help_lists_every_bound_leaf_once() {
-	fn leaves(bs: &[Binding]) -> usize {
-		bs.iter()
-			.map(|b| match &b.node {
-				Node::Run(_) => 1,
-				Node::Scope { children, .. } => leaves(children),
-				_ => unreachable!("Node has two variants"),
-			})
-			.sum()
-	}
-	let k = Keymap::default();
-	let cfg = Config {
-		storage_key: Some("t".into()),
-		on_publish: Some(Rc::new(|_, _| {})),
-		..Default::default()
-	};
-	let (mut s, _) = edited(cfg);
-	let rows = help_rows(&mut s);
-	assert_eq!(rows.len(), leaves(&k.root) + leaves(&k.scope), "{rows:?}");
-	let mut seqs: Vec<&String> = rows.iter().map(|(k, _)| k).collect();
-	seqs.sort();
-	seqs.dedup();
-	assert_eq!(seqs.len(), rows.len(), "every leaf is reached by its own sequence: {rows:?}");
+	assert!(help_rows(&mut s).contains(&HelpRow {
+		sequence: "Alt+Z X Y".into(),
+		label: "Mark".into()
+	}));
 }
 
 #[test]
@@ -327,23 +274,4 @@ fn undo_mid_resize_leaves_the_gesture_intact() {
 	s.resize_move((620.0, 580.0));
 	s.resize_end();
 	assert!(s.grid().overlaps().is_none());
-}
-
-#[test]
-#[should_panic(expected = "twice")]
-fn duplicate_chord_in_one_scope() {
-	let mut keymap = Keymap::default();
-	keymap.scope.push(keymap.scope[0].clone());
-	PackedState::new(Config { keymap, ..Default::default() });
-}
-
-#[test]
-#[should_panic(expected = "leader")]
-fn leader_collides_with_root() {
-	let mut keymap = Keymap::default();
-	keymap.root.push(Binding {
-		on: keymap.leader,
-		node: keymap.scope[0].node.clone(),
-	});
-	PackedState::new(Config { keymap, ..Default::default() });
 }

@@ -608,7 +608,8 @@ mod tests {
 			"growing pushes the tall tile, down to its floor"
 		);
 		assert_eq!(rects(&g.resized(0, 0, 6, 2, 6)), rects(&g.resized(0, 0, 4, 2, 6)), "the edge stops at the floor");
-		assert!(!g.free_left(2) && !g.free_left(0), "a boundary has no left grip, nor does the view's edge");
+		assert!(!g.free_left(2), "a boundary has no left grip, nor does the view's edge");
+		assert!(!g.free_left(0), "a boundary has no left grip, nor does the view's edge");
 		let gap = PackedGrid {
 			cells: vec![cell(0, 0, 1, 2), cell(3, 0, 2, 2)],
 			..Default::default()

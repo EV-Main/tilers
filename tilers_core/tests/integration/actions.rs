@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use tilers_core::{
-	Grip, Group, GroupId, PackedState, PanelId, Step,
-	keys::{Binding, Builtin, Chord, Command, Help, Hint, KeyInput, Keymap, Node},
+	Config, Grip, Group, GroupId, PackedState, PanelId, Step,
+	keys::{Binding, Builtin, Chord, Command, Help, Hint, KeyInput, Node},
 	model::packed::{Cell, DragSource, DropTarget, MinSize, PackedGrid},
 };
 use v_utils::fuzz::Frng;
@@ -117,7 +117,7 @@ pub enum Aim {
 
 /// An unbound key or an editable target: either cancels whatever the sequence had opened.
 pub fn noisy(inputs: &[KeyInput]) -> bool {
-	inputs.iter().any(|k| k.editable || matches!(k.key.as_str(), "j" | "ж"))
+	inputs.iter().any(|k| k.editable || k.key == "j")
 }
 /// Apply `action`, returning the invariant it violated. Several invariants are only expressible
 /// *around* an action (a cancel is a no-op, an unarmed release only activates), so they live here
@@ -368,7 +368,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 				let i = frng.below(inputs.len() as u32) as usize;
 				inputs[i].editable = true;
 			}
-			// A Cyrillic layout: a letter key sends a non-Latin `key`, which nothing binds.
+			// A Cyrillic layout: a letter key sends a non-Latin `key`, and the library reads its `code`.
 			if frng.below(6) == 0 {
 				let i = frng.below(inputs.len() as u32) as usize;
 				if inputs[i].key.len() == 1 && inputs[i].key.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -412,7 +412,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 /// Every leaf of the default keymap as the chords reaching it, so a new bind is fuzzed without
 /// anyone remembering to list it. Platform `other`: natively that is what the state resolves.
 fn sequences() -> Vec<(Vec<Chord>, Builtin)> {
-	fn walk(bs: &[Binding], prefix: &[Chord], out: &mut Vec<(Vec<Chord>, Builtin)>) {
+	fn walk(bs: &[Binding<Command>], prefix: &[Chord], out: &mut Vec<(Vec<Chord>, Builtin)>) {
 		for b in bs {
 			let seq = [prefix, &[b.on.other]].concat();
 			match &b.node {
@@ -422,22 +422,33 @@ fn sequences() -> Vec<(Vec<Chord>, Builtin)> {
 			}
 		}
 	}
-	let k = Keymap::default();
 	let mut out = Vec::new();
-	walk(&k.root, &[], &mut out);
-	walk(&k.scope, &[k.leader.other], &mut out);
+	walk(&Config::default().keymap.root, &[], &mut out);
 	out
 }
 
 /// The keydown a browser reports for `c` on a US layout.
 fn input(c: Chord) -> KeyInput {
-	let letter = c.key.len() == 1 && c.key.chars().all(|ch| ch.is_ascii_alphabetic());
+	let mut chars = c.key.chars();
+	let single = match (chars.next(), chars.next()) {
+		(Some(ch), None) => Some(ch),
+		_ => None,
+	};
+	let code = match single {
+		Some(ch) if ch.is_ascii_alphabetic() => format!("Key{}", ch.to_ascii_uppercase()),
+		Some(ch) if ch.is_ascii_digit() => format!("Digit{ch}"),
+		Some('?') => "Slash".to_owned(),
+		_ => c.key.to_owned(),
+	};
 	KeyInput {
 		key: c.key.to_string(),
+		code,
 		ctrl: c.ctrl,
 		alt: c.alt,
 		meta: c.meta,
-		shift: letter && c.key.chars().all(|ch| ch.is_ascii_uppercase()),
+		shift: c.key == "?" || single.is_some_and(|ch| ch.is_ascii_uppercase()),
+		repeat: false,
+		composing: false,
 		editable: false,
 	}
 }

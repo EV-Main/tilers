@@ -37,11 +37,13 @@ fn seeded(sizes: &[(u32, u32)]) -> PackedState {
 fn a_short_layout_ends_at_the_views_bottom() {
 	let mut state = seeded(&[(32, 4), (32, 3), (32, 2)]);
 	let end = bottom(&state);
-	assert!(end <= HEIGHT && HEIGHT - end < 1.0, "the layout ends at {end}px of a {HEIGHT}px view");
+	assert!(end <= HEIGHT, "the layout ends at {end}px of a {HEIGHT}px view");
+	assert!(HEIGHT - end < 1.0, "the layout ends at {end}px of a {HEIGHT}px view");
 
 	state.set_measure(ORIGIN, (WIDTH, 600.0), false);
 	let end = bottom(&state);
-	assert!(end <= 600.0 && 600.0 - end < 1.0, "after a resize the layout ends at {end}px of 600px");
+	assert!(end <= 600.0, "after a resize the layout ends at {end}px of 600px");
+	assert!(600.0 - end < 1.0, "after a resize the layout ends at {end}px of 600px");
 }
 
 #[test]
@@ -66,5 +68,6 @@ fn rows_hold_still_under_a_resize_and_fill_after_it() {
 	assert!(during[0].1 < h, "the grabbed tile did not follow the pointer");
 	state.resize_end();
 	let end = bottom(&state);
-	assert!(end <= HEIGHT && HEIGHT - end < 1.0, "the settled layout ends at {end}px of a {HEIGHT}px view");
+	assert!(end <= HEIGHT, "the settled layout ends at {end}px of a {HEIGHT}px view");
+	assert!(HEIGHT - end < 1.0, "the settled layout ends at {end}px of a {HEIGHT}px view");
 }

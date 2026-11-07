@@ -434,7 +434,7 @@ pub fn PackedArea(
 									{help
 										.rows
 										.into_iter()
-										.map(|(chord, label)| {
+										.map(|tilers_core::keys::HelpRow { sequence: chord, label }| {
 											view! {
 												<div class="tl-help-row">
 													<span class="tl-help-label">{label}</span>

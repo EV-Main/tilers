@@ -14,10 +14,12 @@ categories = ["gui", "wasm"]
 
 # Touching `window`/DOM is web-only; gated so native `cargo check`/`cargo test` stay green.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+ev_lib = { version = "0.32", default-features = false, features = ["keymap", "wasm"] }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Window", "Storage", "Document", "Element", "HtmlElement", "DomRect", "Node", "NodeList", "CssStyleDeclaration", "Event", "EventTarget", "KeyboardEvent", "Navigator", "console"] }
 
 [dependencies]
+ev_lib = { workspace = true, features = ["keymap"] }
 serde.workspace = true
 serde_json.workspace = true
 

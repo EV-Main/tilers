@@ -14,9 +14,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use ev_lib::keymap::{Platform, Step, Trie};
+
 use crate::{
 	config::{Band, Breakpoint, Config},
-	keys::{Builtin, Command, Help, Hint, KeyInput, KeyOutcome, Step, Trie},
+	keys::{Builtin, Command, Help, Hint, KeyInput, KeyOutcome},
 	model::{
 		Group, GroupId, PanelId,
 		packed::{DragSource, DropTarget, GridState, MinSize, PackedGrid},
@@ -66,10 +68,8 @@ pub struct PackedState {
 	maximized: Option<GroupId>,
 	help: bool,
 	popups: HashSet<GroupId>,
-	/// `cfg.keymap` resolved for this platform and config.
-	keys: Trie,
-	/// The path into `keys` a chord has opened; empty when none is.
-	pending: Vec<usize>,
+	/// `cfg.keymap` resolved for this platform and config, and the scope a chord has opened in it.
+	keys: Trie<Command>,
 	notice: Option<Notice>,
 	notices: u32,
 	undo: UndoHistory,
@@ -86,16 +86,12 @@ impl PackedState {
 	pub fn new(cfg: Config) -> Self {
 		let cols = cfg.steps.max(1);
 		#[cfg(target_arch = "wasm32")]
-		let mac = {
-			let p = web_sys::window().expect("a browser window").navigator().platform().expect("navigator.platform never throws");
-			// iPadOS composes on Option too, and reports `iPad`/`MacIntel`.
-			p.starts_with("Mac") || p.starts_with("iP")
-		};
+		let platform = Platform::current();
 		#[cfg(not(target_arch = "wasm32"))]
-		let mac = false;
-		let keys = Trie::new(&cfg.keymap, mac, |b| match b {
-			Builtin::Cache => cfg.storage_key.is_some(),
-			Builtin::Publish => cfg.on_publish.is_some(),
+		let platform = Platform::Other;
+		let keys = Trie::new(&cfg.keymap, platform, |c| match c {
+			Command::Builtin(Builtin::Cache) => cfg.storage_key.is_some(),
+			Command::Builtin(Builtin::Publish) => cfg.on_publish.is_some(),
 			_ => true,
 		});
 		Self {
@@ -116,7 +112,6 @@ impl PackedState {
 			help: false,
 			popups: HashSet::new(),
 			keys,
-			pending: Vec::new(),
 			notice: None,
 			notices: 0,
 			undo: UndoHistory::default(),
@@ -653,7 +648,7 @@ impl PackedState {
 	/// is the user moving on, so it drops a pending chord.
 	pub fn focus(&mut self, gid: GroupId) {
 		self.focused = Some(gid);
-		self.pending.clear();
+		self.keys.cancel();
 	}
 
 	/// `focused`/`maximized` filtered to a group the layout still holds. They're set by a press and
@@ -686,7 +681,7 @@ impl PackedState {
 
 	/// The window lost focus: the keys that would finish the chord go elsewhere.
 	pub fn cancel_chord(&mut self) {
-		self.pending.clear();
+		self.keys.cancel();
 	}
 
 	// ------- view flags -------
@@ -704,55 +699,49 @@ impl PackedState {
 
 	/// One keydown. Esc is hard-wired: it closes the help, the inspect popups and a pending chord.
 	pub fn on_key(&mut self, k: KeyInput) -> KeyOutcome {
-		let was_pending = !self.pending.is_empty();
-		if k.editable {
-			self.pending.clear();
-			return KeyOutcome {
-				prevent_default: false,
-				changed: was_pending,
-			};
-		}
-		let Some(key) = k.normalized() else {
-			return KeyOutcome {
-				prevent_default: false,
-				changed: false,
-			};
-		};
-		if key == "Escape" && (self.help || !self.popups.is_empty() || was_pending) {
+		if k.normalized().as_deref() == Some("Escape") && !k.editable && !k.composing && (self.help || !self.popups.is_empty()) {
 			self.help = false;
 			self.popups.clear();
-			self.pending.clear();
+			self.keys.cancel();
 			return KeyOutcome {
 				prevent_default: true,
 				changed: true,
 			};
 		}
-		let (cmd, seq) = match self.keys.step(&mut self.pending, &k, &key) {
+		let was_open = self.keys.hint().is_some();
+		match self.keys.key(&k) {
 			Step::Opened => {
 				self.notice = None; // the hint takes its corner
-				return KeyOutcome {
+				KeyOutcome {
 					prevent_default: true,
 					changed: true,
-				};
+				}
 			}
-			Step::Miss => {
-				return KeyOutcome {
-					prevent_default: false,
-					changed: was_pending,
-				};
+			Step::Closed => KeyOutcome {
+				prevent_default: true,
+				changed: true,
+			},
+			Step::Held => KeyOutcome {
+				prevent_default: true,
+				changed: was_open,
+			},
+			Step::Pass { cancelled } => KeyOutcome {
+				prevent_default: false,
+				changed: cancelled,
+			},
+			Step::Run { command, sequence } => {
+				// Logged on recognition, before the command runs: a console line with no visible effect means
+				// the command had nothing to act on, not that the keydown went unseen.
+				#[cfg(target_arch = "wasm32")]
+				web_sys::console::debug_1(&format!("tilers keybind: {sequence} → {command}").into());
+				#[cfg(not(target_arch = "wasm32"))]
+				let _ = sequence; // the console is the only consumer
+				let acted = self.run(command);
+				KeyOutcome {
+					prevent_default: acted,
+					changed: acted || was_open,
+				}
 			}
-			Step::Run(cmd, seq) => (cmd, seq),
-		};
-		// Logged on recognition, before the command runs: a console line with no visible effect means
-		// the command had nothing to act on, not that the keydown went unseen.
-		#[cfg(target_arch = "wasm32")]
-		web_sys::console::debug_1(&format!("tilers keybind: {seq} → {}", cmd.label()).into());
-		#[cfg(not(target_arch = "wasm32"))]
-		let _ = seq; // the console is the only consumer
-		let acted = self.run(cmd);
-		KeyOutcome {
-			prevent_default: acted,
-			changed: acted || was_pending,
 		}
 	}
 
@@ -1039,13 +1028,13 @@ impl PackedState {
 				let c = self.grid.cells.iter().find(|c| c.group.id == g).expect("live() checked the group exists");
 				titles.get(c.group.active_panel()).cloned()
 			}),
-			rows: self.keys.rows(),
+			rows: self.keys.help(),
 		})
 	}
 
 	/// The which-key popup, while a chord is pending.
 	pub fn hint(&self) -> Option<Hint> {
-		self.keys.hint(&self.pending)
+		self.keys.hint()
 	}
 
 	/// Say `text` in the dock's toast; the latest replaces any before it.
