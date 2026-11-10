@@ -126,6 +126,7 @@ fn bare_keys_are_not_ours() {
 #[test]
 fn root_undo() {
 	check(Config::default(), seq("Alt+z u"), Lands::Undone, true);
+	check(Config::default(), seq("!Alt+z !u"), Lands::Undone, true);
 	check(Config::default(), seq("Ctrl+z"), Lands::Undone, true);
 	check(Config::default(), seq("Ctrl+z Ctrl+Z"), Lands::Edited, true);
 	check(Config::default(), seq("Ctrl+z Ctrl+y"), Lands::Edited, true);

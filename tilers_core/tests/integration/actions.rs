@@ -115,9 +115,10 @@ pub enum Aim {
 	Escape,
 }
 
-/// An unbound key or an editable target: either cancels whatever the sequence had opened.
+/// An unbound key, which cancels whatever the sequence had opened. An editable target doesn't: a leader
+/// opens from it, and an open scope's keys are the keymap's.
 pub fn noisy(inputs: &[KeyInput]) -> bool {
-	inputs.iter().any(|k| k.editable == Some(true) || k.normalized().as_deref() == Some("j"))
+	inputs.iter().any(|k| k.normalized().as_deref() == Some("j"))
 }
 /// Apply `action`, returning the invariant it violated. Several invariants are only expressible
 /// *around* an action (a cancel is a no-op, an unarmed release only activates), so they live here
@@ -589,9 +590,12 @@ fn key(inputs: &[KeyInput], aim: Aim, world: &mut World) -> Result<(), String> {
 		let was = seen(&world.state);
 		let out = world.state.on_key(k.clone());
 		let now = seen(&world.state);
-		// Only the pending chord (the hint) may move: text undo and typing stay the browser's.
-		if k.editable == Some(true) && (out.prevent_default || now.grid != was.grid || now.help != was.help || now.inspect != was.inspect || now.frames != was.frames) {
-			return Err(format!("{k:?} aimed at an editable acted: {out:?}"));
+		// With no scope open, a key aimed at an editable may only open one: a root leaf leaves it its typing and undo.
+		if k.editable == Some(true)
+			&& was.hint.is_none()
+			&& (out.prevent_default != now.hint.is_some() || now.grid != was.grid || now.help != was.help || now.inspect != was.inspect || now.frames != was.frames)
+		{
+			return Err(format!("{k:?} aimed at an editable with no scope open acted: {out:?}"));
 		}
 		// A binding re-renders only on `changed`, so anything else that moved is a stale screen.
 		if !out.changed && now != was {
