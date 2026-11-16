@@ -10,6 +10,7 @@
 //! one-line target table below.
 
 mod actions;
+mod carry;
 mod keys;
 mod mins;
 mod oracle;

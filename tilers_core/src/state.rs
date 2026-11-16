@@ -78,7 +78,27 @@ pub struct PackedState {
 	/// This instance's `.tl-packed` element — DOM reads stay inside it, never document-wide.
 	#[cfg(target_arch = "wasm32")]
 	root: Option<web_sys::Element>,
+	/// Which dock answers the keyboard is decided across instances ([`claim_keys`](Self::claim_keys)).
+	instance: u64,
+	/// Its root sits inside another dock: with no dock pressed yet, the outer one answers.
+	nested: bool,
 	cfg: Config,
+}
+
+impl Drop for PackedState {
+	fn drop(&mut self) {
+		KEYS_OWNER.with(|o| {
+			if o.get() == Some(self.instance) {
+				o.set(None);
+			}
+		});
+	}
+}
+
+thread_local! {
+	static INSTANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+	/// The dock a pointer last pressed in, innermost first; `None` until a press, or once it is dropped.
+	static KEYS_OWNER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 impl PackedState {
@@ -122,13 +142,29 @@ impl PackedState {
 			shown: None,
 			#[cfg(target_arch = "wasm32")]
 			root: None,
+			instance: INSTANCES.with(|n| {
+				n.set(n.get() + 1);
+				n.get()
+			}),
+			nested: false,
 			cfg,
 		}
 	}
 
 	#[cfg(target_arch = "wasm32")]
 	pub fn set_root(&mut self, el: web_sys::Element) {
+		self.nested = el.parent_element().is_some_and(|p| p.closest(".tl-packed").expect("a constant, valid selector").is_some());
 		self.root = Some(el);
+	}
+
+	/// A pointer pressed inside this dock. Bindings call it in the capture phase, so of nested docks
+	/// the innermost claims last and keeps the keyboard.
+	pub fn claim_keys(&self) {
+		KEYS_OWNER.with(|o| o.set(Some(self.instance)));
+	}
+
+	fn owns_keys(&self) -> bool {
+		KEYS_OWNER.with(|o| o.get()).map_or(!self.nested, |owner| owner == self.instance)
 	}
 
 	/// Insertion slot for cursor x `mx` among `group`'s tabs in the live preview DOM: the count of
@@ -350,7 +386,7 @@ impl PackedState {
 
 	pub fn set_scroll(&mut self, y: f64) {
 		self.scroll = y;
-		if let Some(c) = self.drag.as_ref().map(|d| d.cursor) {
+		if let Some(c) = self.drag.as_ref().filter(|d| d.armed).map(|d| d.cursor) {
 			self.drag_move(c); // the cursor now sits over other content
 		}
 	}
@@ -432,6 +468,8 @@ impl PackedState {
 			cursor: start,
 			armed: false,
 			target: None,
+			carried: false,
+			incoming: None,
 		});
 	}
 
@@ -451,7 +489,68 @@ impl PackedState {
 			cursor: start,
 			armed: false,
 			target: None,
+			carried: false,
+			incoming: None,
 		});
+	}
+
+	/// A native drag carrying `panel` (a host's own draggable) began: dragged over this dock it shows
+	/// where it lands, and dropped it lands there — a tile of `w×h`, as [`place`](Self::place) wants
+	/// it, or a tab of the strip it drops on. A panel already hosted moves, as dragging its tab would.
+	/// The panel must already have a declared min. The binding forwards the drag's `dragover` to
+	/// [`drag_move`](Self::drag_move), `drop` to [`drag_release`](Self::drag_release), leaving the dock
+	/// to [`carry_out`](Self::carry_out) and `dragend` to [`drag_cancel`](Self::drag_cancel).
+	pub fn carry(&mut self, panel: PanelId, w: u32, h: u32) {
+		if self.resize.is_some() {
+			return; // one gesture at a time: a drag would drop the cells the resize addresses
+		}
+		let hosted = self.grid.cells.iter().find(|c| c.group.tabs.contains(&panel)).map(|c| (c.group.id, c.group.tabs.len(), c.w, c.h));
+		let (source, src_w, src_h, incoming) = match hosted {
+			Some((from, tabs, w, h)) => {
+				self.focus(from);
+				let source = if tabs > 1 { DragSource::Tab { panel, from } } else { DragSource::Tile(from) };
+				(source, w, h, None)
+			}
+			None => {
+				let floor = self.floor(std::slice::from_ref(&panel));
+				let (src_w, src_h) = (w.max(floor.0).min(self.cols), h.max(floor.1));
+				(DragSource::Tile(self.grid.clone().mint_group_id()), src_w, src_h, Some((panel, w, h)))
+			}
+		};
+		let (sw, sh) = self.step_px;
+		self.drag = Some(Drag {
+			source,
+			src_w,
+			src_h,
+			start: (0.0, 0.0),
+			grab: (src_w as f64 * sw / 2.0, src_h as f64 * sh / 2.0),
+			cursor: (0.0, 0.0),
+			armed: false,
+			target: None,
+			carried: true,
+			incoming,
+		});
+	}
+
+	/// A carry left the dock: it lands nowhere until it comes back.
+	pub fn carry_out(&mut self) {
+		if let Some(d) = self.drag.as_mut().filter(|d| d.carried) {
+			d.armed = false;
+			d.target = None;
+		}
+	}
+
+	pub fn carrying(&self) -> bool {
+		self.drag.as_ref().is_some_and(|d| d.carried)
+	}
+
+	/// The source a drop re-homes, `d`'s carried panel placed into `g` first when it isn't hosted yet,
+	/// so preview and release land a carry through the one [`drop`](PackedGrid::drop).
+	fn landing(&self, g: &mut PackedGrid, d: &Drag) -> DragSource {
+		let Some((panel, w, h)) = &d.incoming else { return d.source.clone() };
+		let gid = g.mint_group_id();
+		g.place(Group::new(gid, panel.clone()), *w, *h, self.floor(std::slice::from_ref(panel)), self.cols);
+		DragSource::Tile(gid)
 	}
 
 	/// Advance an in-flight drag: arm past the `DRAG_THRESHOLD`, then resolve the live
@@ -462,11 +561,15 @@ impl PackedState {
 		d.cursor = cursor;
 		if !d.armed {
 			let (dx, dy) = (cursor.0 - d.start.0, cursor.1 - d.start.1);
-			// Below the threshold the ghost isn't shown yet, so the discarded cursor update is moot.
-			if (dx * dx + dy * dy).sqrt() <= DRAG_THRESHOLD {
+			// Below the threshold the ghost isn't shown yet, so the discarded cursor update is moot. A
+			// carry passed its threshold outside the dock, where the drag began.
+			if !d.carried && (dx * dx + dy * dy).sqrt() <= DRAG_THRESHOLD {
 				return;
 			}
 			d.armed = true;
+		}
+		if d.incoming.is_some() {
+			d.source = DragSource::Tile(self.grid.clone().mint_group_id()); // the id its landing will mint
 		}
 		let (ox, oy) = self.root_origin;
 		let (sw, sh) = self.step_px;
@@ -490,9 +593,9 @@ impl PackedState {
 		// The model can only append (it has no tab geometry); refine the slot from the live preview's
 		// tab rects, skipping the ghost's own tab(s) so we read the source-free order.
 		if let DropTarget::Tab { group, index } = t {
-			let dragged: Vec<String> = match &d.source {
-				DragSource::Tab { panel, .. } => vec![panel.0.clone()],
-				DragSource::Tile(g) => self
+			let dragged: Vec<String> = match (&d.source, &d.incoming) {
+				(_, Some((panel, ..))) | (DragSource::Tab { panel, .. }, None) => vec![panel.0.clone()],
+				(DragSource::Tile(g), None) => self
 					.grid
 					.cells
 					.iter()
@@ -518,11 +621,16 @@ impl PackedState {
 	pub fn drag_release(&mut self) {
 		let Some(d) = self.drag.take() else { return };
 		if d.armed {
-			if let Some(t) = d.target {
-				self.grid.drop(d.source, t, self.cols);
+			if let Some(t) = d.target.clone() {
+				let mut g = self.grid.clone();
+				let source = self.landing(&mut g, &d);
+				g.drop(source, t, self.cols);
+				self.grid = g;
 				self.refloor();
 			}
-		} else if let DragSource::Tab { panel, from } = &d.source {
+		} else if !d.carried
+			&& let DragSource::Tab { panel, from } = &d.source
+		{
 			self.drag_enter_tab(*from, panel);
 		}
 	}
@@ -689,6 +797,14 @@ impl PackedState {
 
 	/// One keydown. Esc is hard-wired: it closes the help, the inspect popups and a pending chord.
 	pub fn on_key(&mut self, k: KeyInput) -> KeyOutcome {
+		if !self.owns_keys() {
+			let open = !self.pending.is_empty();
+			self.pending.clear(); // another dock was pressed since this one's chord opened
+			return KeyOutcome {
+				prevent_default: false,
+				changed: open,
+			};
+		}
 		let was_pending = !self.pending.is_empty();
 		if k.editable {
 			self.pending.clear();
@@ -819,7 +935,8 @@ impl PackedState {
 			Some(d) if d.armed => match &d.target {
 				Some(t) => {
 					let mut p = g;
-					p.drop(d.source.clone(), t.clone(), self.cols);
+					let source = self.landing(&mut p, d);
+					p.drop(source, t.clone(), self.cols);
 					p
 				}
 				None => g,
@@ -959,14 +1076,15 @@ impl PackedState {
 	/// cursor's ghost, not the snapped grey shadow at the landing cell.
 	fn ghost_hidden(&self, preview: &PackedGrid) -> HashSet<PanelId> {
 		match &self.drag {
-			Some(d) if d.armed => match &d.source {
-				DragSource::Tile(g) => preview
+			Some(d) if d.armed => match (&d.source, &d.incoming) {
+				(_, Some((panel, ..))) => std::iter::once(panel.clone()).collect(),
+				(DragSource::Tile(g), None) => preview
 					.cells
 					.iter()
 					.find(|c| c.group.id == *g)
 					.map(|c| c.group.tabs.iter().cloned().collect())
 					.unwrap_or_default(),
-				DragSource::Tab { panel, .. } => std::iter::once(panel.clone()).collect(),
+				(DragSource::Tab { panel, .. }, None) => std::iter::once(panel.clone()).collect(),
 			},
 			_ => HashSet::new(),
 		}
@@ -975,7 +1093,7 @@ impl PackedState {
 	/// The floating ghost of whatever is being dragged: it tracks the pointer 1:1 (`cursor − grab`),
 	/// keeping the grabbed point under the cursor, while its shadow snaps to the landing cell.
 	pub fn ghost(&self, titles: &HashMap<PanelId, String>) -> Option<Ghost> {
-		let d = self.drag.as_ref().filter(|d| d.armed)?;
+		let d = self.drag.as_ref().filter(|d| d.armed && !d.carried)?; // the browser draws a carry's drag image
 		let tabs = match &d.source {
 			DragSource::Tile(g) => Tab::strip(&self.grid.cells.iter().find(|c| c.group.id == *g).expect("drag source group exists").group, titles),
 			DragSource::Tab { panel, .. } => vec![Tab {
@@ -1215,6 +1333,10 @@ struct Drag {
 	cursor: (f64, f64),
 	armed: bool,
 	target: Option<DropTarget>,
+	/// A native drag ([`PackedState::carry`]): its pointer is the browser's, its ghost the drag image.
+	carried: bool,
+	/// A carried panel not hosted yet, and the `w×h` its tile wants; `source` is the tile its landing mints.
+	incoming: Option<(PanelId, u32, u32)>,
 }
 
 /// A resize in flight: the grabbed tile and grip, the layout and pointer at the press, and the

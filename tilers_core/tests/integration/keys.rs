@@ -344,3 +344,20 @@ fn leader_collides_with_root() {
 	});
 	PackedState::new(Config { keymap, ..Default::default() });
 }
+
+#[test]
+fn only_the_dock_last_pressed_in_answers() {
+	let (mut outer, _) = edited(Config::default());
+	let (mut inner, _) = edited(Config::default());
+	assert!(press(&mut outer, seq("Alt+z"))[0].prevent_default, "before any press every un-nested dock answers");
+	press(&mut outer, seq("Escape"));
+	inner.claim_keys();
+	assert!(!press(&mut outer, seq("Alt+z"))[0].prevent_default, "the other dock was pressed last");
+	assert!(press(&mut inner, seq("Alt+z"))[0].prevent_default);
+	outer.claim_keys();
+	let left = press(&mut inner, seq("u")).remove(0);
+	assert!(!left.prevent_default, "a chord open in a dock pressed away from closes, and the key passes");
+	assert!(left.changed, "a chord open in a dock pressed away from closes, and the key passes");
+	drop(outer);
+	assert!(press(&mut inner, seq("Alt+z"))[0].prevent_default, "the owner is gone: un-nested docks answer again");
+}

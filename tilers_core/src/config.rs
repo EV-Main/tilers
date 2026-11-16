@@ -106,7 +106,7 @@ impl Breakpoint {
 /// The unit a layout is stored under: phone, tablet, desktop. Coarser than [`Breakpoint`], which
 /// exists to keep the *step* physically constant and would otherwise force a separate saved layout
 /// for a 200px width difference nobody rearranges tiles over.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 pub enum Band {
 	Sm,
 	Md,

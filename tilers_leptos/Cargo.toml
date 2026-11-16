@@ -31,7 +31,7 @@ send_wrapper = "0.6"
 leptos.workspace = true
 tilers_core.workspace = true
 wasm-bindgen.workspace = true
-web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "HtmlElement", "HtmlDivElement", "DomRect", "Node", "NodeList", "EventTarget", "KeyboardEvent", "MouseEvent", "PointerEvent", "ResizeObserver", "console"] }
+web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "HtmlElement", "HtmlDivElement", "DomRect", "DragEvent", "Node", "NodeList", "EventTarget", "KeyboardEvent", "MouseEvent", "PointerEvent", "ResizeObserver", "console"] }
 
 [lints]
 workspace = true

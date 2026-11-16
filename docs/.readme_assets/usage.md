@@ -64,6 +64,10 @@ api.notify(text);                          // the dock's toast
 api.cols(); api.band(); api.tab_ids();
 ```
 
+**Dragging in from outside** — a host's own draggable (a sidebar item) lands in the dock where it is dropped: in its `ondragstart`, put the panel in `panels` and call `api.carry(panel_id, w, h)`. Over the dock the landing shows as for a tile drag, a tab strip takes it as a tab, and a drop anywhere else lands nothing. A panel already hosted is moved, not copied.
+
+**Nested docks** — a dock inside another's tile works as is: the keyboard goes to the dock last pressed in (the innermost), and before any press to the outer one.
+
 **Keybinds** (`Config::keymap`). The framework claims only `Keymap::root` and one leader, `Alt+z` (`Ctrl+t` on macOS); everything else waits behind the leader, where a which-key popup lists the next keys after `--tl-hint-delay` (150ms). Root holds `Ctrl+z`/`Ctrl+y`/`Ctrl+Shift+z` (`Cmd` on macOS) for undo/redo; aimed at a text field they stay the browser's text undo. Behind the leader: `u`/`U` undo/redo, `Backspace` closes the focused pane, `f` maximizes it, `d` inspects it, `?` lists the whole keymap (as does each tile's `?` button), and `s`/`S` cache/cache-and-publish the layout (unbound without `storage_key`/`on_publish`). Rebinding the leader is `Keymap { leader: Chord { key: "g", alt: true, .. }.into(), ..Default::default() }`; dropping it for flat binds is `k.root.append(&mut k.scope)`. Your own commands are `Node::Run(Command::Custom { label, run })` at any depth, `Node::Scope` nests.
 
 **Grid** — `Config::steps` (default 64) is the desktop column count, scaled down per band so the *physical* step stays ~constant and tiles reflow instead of shrinking; `rows` (default 36) is fixed.

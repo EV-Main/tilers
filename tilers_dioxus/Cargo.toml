@@ -27,7 +27,7 @@ wasm-bindgen = "0.2"
 [dependencies]
 dioxus.workspace = true
 tilers_core.workspace = true
-web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "HtmlElement", "DomRect", "Node", "NodeList", "EventTarget", "KeyboardEvent", "Location", "MouseEvent", "PointerEvent", "console"] } # `Location`: dioxus-web without `devtools` uses it but doesn't enable it
+web-sys = { workspace = true, features = ["Window", "Storage", "Document", "Element", "HtmlElement", "DomRect", "Node", "NodeList", "EventTarget", "KeyboardEvent", "Location", "DragEvent", "MouseEvent", "PointerEvent", "console"] } # `Location`: dioxus-web without `devtools` uses it but doesn't enable it
 
 [dev-dependencies]
 dioxus = { workspace = true, features = ["launch", "devtools", "logger"] }

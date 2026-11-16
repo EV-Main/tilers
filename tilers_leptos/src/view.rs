@@ -39,6 +39,17 @@ impl PackedApi {
 		});
 	}
 
+	/// A native drag the host started carries `panel`: dropped on this dock it lands where it drops, a
+	/// `w×h` tile or a tab of the strip it drops on; a panel already hosted moves there. Call it from
+	/// the drag source's `dragstart`. `panel` must already be in `panels`.
+	pub fn carry(&self, panel: PanelId, w: u32, h: u32) {
+		let mins = self.panels.with_untracked(|ps| mins_of(ps));
+		self.state.update(|s| {
+			s.set_mins(mins);
+			s.carry(panel, w, h)
+		});
+	}
+
 	pub fn close_active(&self, group: GroupId) {
 		self.state.update(|s| s.close_active(group));
 	}
@@ -138,16 +149,21 @@ pub fn PackedArea(
 			}
 		});
 		let observer = web_sys::ResizeObserver::new(on_resize.as_ref().unchecked_ref()).expect("ResizeObserver is baseline in every browser");
+		// Capture phase, so of nested docks the innermost claims last, and a tile's own `stopPropagation` can't skip it.
+		let press = std::rc::Rc::new(Closure::<dyn Fn()>::new(move || state.with_untracked(|s| s.claim_keys())));
 		root.on_load({
 			let observer = observer.clone();
 			let on_band = on_band.clone();
+			let press = press.clone();
 			move |el| {
+				el.add_event_listener_with_callback_and_bool("pointerdown", (*press).as_ref().unchecked_ref(), true)
+					.expect("add pointerdown listener");
 				state.update(|s| s.set_root(el.clone().into()));
 				observer.observe(&el);
 				measure(el.into(), state, api, on_band.as_ref())
 			}
 		});
-		let held = send_wrapper::SendWrapper::new((observer, on_resize));
+		let held = send_wrapper::SendWrapper::new((observer, on_resize, press));
 		on_cleanup(move || held.take().0.disconnect());
 	}
 	#[cfg(not(target_arch = "wasm32"))]
@@ -185,15 +201,27 @@ pub fn PackedArea(
 			}
 		});
 		let blur = Closure::<dyn Fn()>::new(move || state.update(|s| s.cancel_chord()));
+		// A carry's drag ended: dropped here, `drop` came first and released it; anywhere else, it lands nowhere.
+		let dragend = Closure::<dyn Fn()>::new(move || {
+			if state.with_untracked(|s| s.carrying()) {
+				state.update(|s| s.drag_cancel());
+			}
+		});
 		let window = web_sys::window().expect("a browser window");
+		window
+			.add_event_listener_with_callback("dragend", dragend.as_ref().unchecked_ref())
+			.expect("add dragend listener");
 		window
 			.add_event_listener_with_callback_and_bool("keydown", keydown.as_ref().unchecked_ref(), true)
 			.expect("add keydown listener");
 		window.add_event_listener_with_callback("blur", blur.as_ref().unchecked_ref()).expect("add blur listener");
-		let held = send_wrapper::SendWrapper::new((keydown, blur));
+		let held = send_wrapper::SendWrapper::new((keydown, blur, dragend));
 		on_cleanup(move || {
-			let (keydown, blur) = held.take();
+			let (keydown, blur, dragend) = held.take();
 			let window = web_sys::window().expect("a browser window");
+			window
+				.remove_event_listener_with_callback("dragend", dragend.as_ref().unchecked_ref())
+				.expect("remove dragend listener");
 			window
 				.remove_event_listener_with_callback_and_bool("keydown", keydown.as_ref().unchecked_ref(), true)
 				.expect("remove keydown listener");
@@ -262,6 +290,28 @@ pub fn PackedArea(
 					as f64;
 				state.update(|s| s.set_scroll(y));
 			}
+			on:dragover=move |e: web_sys::DragEvent| {
+				if state.with_untracked(|s| s.carrying()) {
+					e.prevent_default();
+					state.update(|s| s.drag_move((e.client_x() as f64, e.client_y() as f64)));
+				}
+			}
+			on:drop=move |e: web_sys::DragEvent| {
+				if state.with_untracked(|s| s.carrying()) {
+					e.prevent_default();
+					state.update(|s| s.drag_release());
+				}
+			}
+			on:dragleave=move |e: web_sys::DragEvent| {
+				use wasm_bindgen::JsCast;
+				if state.with_untracked(|s| s.carrying()) {
+					let into = e.related_target().and_then(|t| t.dyn_into::<web_sys::Node>().ok());
+					let root = root.get_untracked().expect("a drag reaches the mounted root");
+					if !into.is_some_and(|n| root.contains(Some(&n))) {
+						state.update(|s| s.carry_out());
+					}
+				}
+			}
 		>
 			// Tile skeleton — coarse re-render on any state change (no user content lives here).
 			{move || {
@@ -325,9 +375,10 @@ pub fn PackedArea(
 			}}
 
 			// Drag capture surface: owns pointermove/up for the whole gesture so moves over tiles don't leak.
+			// A carry's pointer is the browser's: the surface would only take its drop away from the tiles.
 			{move || {
 				state
-					.with(|s| s.dragging())
+					.with(|s| s.dragging() && !s.carrying())
 					.then(|| {
 						view! {
 							<div
