@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Action kinds, in the order their swarm weights are drawn.
-pub const N_KINDS: usize = 11;
+pub const N_KINDS: usize = 12;
 /// Height of the tile chrome: `Config::title_h_rem`'s default resolved against the 16px root font a
 /// non-DOM target assumes. Mirrored here only to aim at headers and to re-run the pure
 /// `resolve_target` for the coverage tally.
@@ -41,6 +41,7 @@ const SAVE_LOAD: usize = 7;
 const SET_MINS: usize = 8;
 const SCROLL: usize = 9;
 const DRAG_ENTER_TAB: usize = 10;
+const CARRY: usize = 11;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -100,6 +101,20 @@ pub enum Action {
 		group: GroupId,
 		panel: PanelId,
 	},
+	/// A host's native drag carrying a panel — a new one, or one already hosted — over the dock along
+	/// `path`, leaving it after the move at `out` (if any), then dropped or ended elsewhere.
+	Carry {
+		panel: Carried,
+		path: Vec<(f64, f64)>,
+		out: Option<usize>,
+		commit: bool,
+	},
+}
+
+#[derive(Clone, Debug)]
+pub enum Carried {
+	New { w: u32, h: u32, min: MinSize },
+	Hosted(PanelId),
 }
 
 /// What a press picks up, with the press point and the pointer's offset within the pressed element.
@@ -206,6 +221,7 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 			world.scroll = *y;
 			world.state.set_scroll(*y);
 		}
+		Action::Carry { panel, path, out, commit } => return carry(panel, path, *out, *commit, world, mid),
 		Action::DragEnterTab { group, panel } => {
 			world.structural_edit();
 			let mut expect = world.state.grid().clone();
@@ -232,6 +248,10 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 	let cells = &world.state.grid().cells;
 
 	let mut avail = vec![MEASURE, PLACE, KEY, SCROLL];
+	// A carry is a gesture: it waits for a resize left in flight to end, as `carry` does.
+	if world.state.resizing().is_none() {
+		avail.push(CARRY);
+	}
 	if !cells.is_empty() {
 		avail.push(ADD_TAB);
 		avail.push(FOCUS);
@@ -406,6 +426,27 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			};
 			Action::DragEnterTab { group, panel }
 		}
+		CARRY => {
+			let panel = match cells.is_empty() || frng.below(3) != 0 {
+				true => {
+					let (w, h) = (1 + frng.below(world.state.cols() / 2), 1 + frng.below(world.state.rows() / 2));
+					Carried::New { w, h, min: min(frng, w, h) }
+				}
+				false => {
+					let c = &cells[frng.below(cells.len() as u32) as usize];
+					Carried::Hosted(c.group.tabs[frng.below(c.group.tabs.len() as u32) as usize].clone())
+				}
+			};
+			let from = aim(frng, world);
+			let to = aim(frng, world);
+			let path = path(frng, from, to, true);
+			Action::Carry {
+				out: (frng.below(4) == 0).then(|| frng.below(path.len() as u32) as usize),
+				path,
+				panel,
+				commit: frng.below(4) != 0,
+			}
+		}
 		_ => unreachable!("kind is one of the constants pushed into `avail`"),
 	})
 }
@@ -417,7 +458,7 @@ fn sequences() -> Vec<(Vec<Chord>, Builtin)> {
 		for b in bs {
 			let seq = [prefix, &[b.on.other]].concat();
 			match &b.node {
-				Node::Run(Command::Builtin(x)) => out.push((seq, *x)),
+				Node::Run { command: Command::Builtin(x), .. } => out.push((seq, *x)),
 				Node::Scope { children, .. } => walk(children, &seq, out),
 				_ => unreachable!("the default keymap holds only builtins and scopes"),
 			}
@@ -470,6 +511,54 @@ fn min(frng: &mut Frng, w: u32, h: u32) -> MinSize {
 			w: frng.below(600) as f64,
 			h: frng.below(400) as f64,
 		},
+	}
+}
+
+/// One whole carry: a cancel, or a drop made outside the dock, leaves the layout as it was; a drop
+/// inside hosts the panel exactly once.
+fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
+	let panel = match panel {
+		Carried::New { w, h, min } => {
+			let id = world.mint_panel(*min);
+			world.state.carry(id.clone(), *w, *h);
+			id
+		}
+		Carried::Hosted(id) => {
+			world.state.carry(id.clone(), 1, 1);
+			id.clone()
+		}
+	};
+	let before = world.state.grid().clone();
+	let mut inside = false;
+	for (i, p) in path.iter().enumerate() {
+		world.cursor = *p;
+		world.state.drag_move(*p);
+		inside = true;
+		oracle::check_in_flight(world)?;
+		if out == Some(i) {
+			world.state.carry_out();
+			inside = false;
+		}
+		mid(world);
+	}
+	if world.state.grid() != &before {
+		return Err("a carry in flight mutated the layout".to_string());
+	}
+	if !commit {
+		world.state.drag_cancel();
+		return if world.state.grid() == &before {
+			Ok(())
+		} else {
+			Err("cancelling a carry changed the layout".to_string())
+		};
+	}
+	world.structural_edit();
+	world.state.drag_release();
+	let hosts = world.state.grid().cells.iter().filter(|c| c.group.tabs.contains(&panel)).count();
+	match (inside, hosts) {
+		(false, _) if world.state.grid() != &before => Err("a carry released outside the dock changed the layout".to_string()),
+		(true, 1) | (false, _) => Ok(()),
+		(true, n) => Err(format!("a carry of {panel:?} dropped inside left it hosted {n} times")),
 	}
 }
 

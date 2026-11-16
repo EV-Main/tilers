@@ -37,6 +37,16 @@ impl PackedApi {
 		s.add_tab(group, panel);
 	}
 
+	/// A native drag the host started carries `panel`: dropped on this dock it lands where it drops, a
+	/// `w×h` tile or a tab of the strip it drops on; a panel already hosted moves there. Call it from
+	/// the drag source's `ondragstart`. `panel` must already be in `panels`.
+	pub fn carry(&mut self, panel: PanelId, w: u32, h: u32) {
+		let mins = mins_of(&self.panels.peek());
+		let mut s = self.state.write();
+		s.set_mins(mins);
+		s.carry(panel, w, h);
+	}
+
 	pub fn close_active(&mut self, group: GroupId) {
 		self.state.write().close_active(group);
 	}
@@ -154,8 +164,21 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 		let mut state = state;
 		let blur = Closure::<dyn FnMut()>::new(move || state.write().cancel_chord());
 		window.add_event_listener_with_callback("blur", blur.as_ref().unchecked_ref()).expect("add blur listener");
-		std::rc::Rc::new((key, blur))
+		// A carry's drag ended: dropped here, `drop` came first and released it; anywhere else, it lands nowhere.
+		let dragend = Closure::<dyn FnMut()>::new(move || {
+			if state.peek().carrying() {
+				state.write().drag_cancel();
+			}
+		});
+		window
+			.add_event_listener_with_callback("dragend", dragend.as_ref().unchecked_ref())
+			.expect("add dragend listener");
+		// Capture phase, so of nested docks the innermost claims last, and a tile's own `stopPropagation` can't skip it.
+		let press = Closure::<dyn FnMut()>::new(move || state.peek().claim_keys());
+		std::rc::Rc::new((key, blur, dragend, press))
 	});
+	#[cfg(target_arch = "wasm32")]
+	let press = listeners.clone();
 	#[cfg(target_arch = "wasm32")]
 	use_drop(move || {
 		use wasm_bindgen::JsCast;
@@ -166,6 +189,9 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 		window
 			.remove_event_listener_with_callback("blur", listeners.1.as_ref().unchecked_ref())
 			.expect("remove blur listener");
+		window
+			.remove_event_listener_with_callback("dragend", listeners.2.as_ref().unchecked_ref())
+			.expect("remove dragend listener");
 	});
 
 	// A frame loop for as long as a drag is live, so a pointer held at an edge keeps scrolling.
@@ -248,6 +274,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 	let hint = state.read().hint();
 	let notice = state.read().notice();
 	let dragging = state.read().dragging();
+	let carrying = state.read().carrying();
 	let resizing = state.read().resizing();
 	let panel_list = panels.read().clone();
 
@@ -261,7 +288,10 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 				#[cfg(target_arch = "wasm32")]
 				{
 					use dioxus::web::WebEventExt;
+					use wasm_bindgen::JsCast;
 					let el = e.data().as_web_event();
+					el.add_event_listener_with_callback_and_bool("pointerdown", press.3.as_ref().unchecked_ref(), true)
+						.expect("add pointerdown listener");
 					state.write().set_root(el.clone());
 					measure(&el, state, api, on_band);
 					root.set(Some(el));
@@ -272,6 +302,34 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 			onscroll: move |_| {
 				#[cfg(target_arch = "wasm32")]
 				state.write().set_scroll(root.peek().as_ref().expect("a scroll comes from the mounted root").scroll_top() as f64);
+			},
+			ondragover: move |e: DragEvent| {
+				if state.peek().carrying() {
+					e.prevent_default(); // takes the drop
+					let c = e.client_coordinates();
+					state.write().drag_move((c.x, c.y));
+				}
+			},
+			ondrop: move |e: DragEvent| {
+				if state.peek().carrying() {
+					e.prevent_default();
+					state.write().drag_release();
+				}
+			},
+			ondragleave: move |e: DragEvent| {
+				#[cfg(target_arch = "wasm32")]
+				if state.peek().carrying() {
+					use dioxus::web::WebEventExt;
+					use wasm_bindgen::JsCast;
+					let into = e.as_web_event().related_target().and_then(|t| t.dyn_into::<web_sys::Node>().ok());
+					let root = root.peek();
+					let root = root.as_ref().expect("a drag reaches the mounted root");
+					if !into.is_some_and(|n| root.contains(Some(&n))) {
+						state.write().carry_out();
+					}
+				}
+				#[cfg(not(target_arch = "wasm32"))]
+				let _ = e;
 			},
 			onresize: move |_| {
 				#[cfg(target_arch = "wasm32")]
@@ -420,7 +478,8 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 
 			// Drag capture: a fixed surface (the Dioxus-web stand-in for `setPointerCapture`) that owns
 			// pointermove/up for the whole gesture, so moves over child tiles don't leak.
-			if dragging {
+			// A carry's pointer is the browser's: the surface would only take its drop away from the tiles.
+			if dragging && !carrying {
 				div {
 					style: "position:fixed; inset:0; z-index:1000; cursor:grabbing;",
 					onpointermove: move |e: PointerEvent| {
@@ -470,7 +529,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 						if let Some(p) = help.pane {
 							div { class: "tl-help-pane", {p} }
 						}
-						for tilers_core::keys::HelpRow { sequence: chord, label } in help.rows {
+						for tilers_core::keys::HelpRow { sequence: chord, label, .. } in help.rows {
 							div { class: "tl-help-row",
 								span { class: "tl-help-label", {label} }
 								span { class: "tl-help-key", {chord} }

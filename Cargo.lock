@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "ev_lib"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "dioxus",
  "uuid",

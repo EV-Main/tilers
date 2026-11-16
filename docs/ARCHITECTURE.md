@@ -61,7 +61,11 @@ Bindings (`tilers_dioxus`, `tilers_leptos`) hold `PackedState` in one reactive
 cell, forward DOM events into it, render the view-model, and expose `PackedApi` — a cheap
 handle over that cell — to the host through `on_band`.
 Tile drags are the reducer's own pointer gestures; a native drag (a host's card, a file) only opens
-a tab it enters (`drag_enter_tab`), and the drop stays the content's.
+a tab it enters (`drag_enter_tab`), and the drop stays the content's — unless the host declared it a
+carry (`carry`): then its `dragover`s drive the same `drag_move` → `resolve_target` → preview `drop`
+a tile drag does, its `drop` releases, and leaving the dock or ending elsewhere lands nothing. A carry
+of a panel not hosted yet places it into the grid it lands on first, so preview and release go
+through the one `drop`.
 
 `tilers_grafana` is a *host* of the Leptos binding, not a third binding: a Grafana app
 plugin (`plugin/`, TS + `@grafana/scenes`) whose wasm half mounts `PackedArea` with one bare slot
@@ -127,6 +131,9 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   so on the console — never a silent wipe.
 - The framework's global key footprint is exactly `Keymap::root` (the leader being a root scope) ∪
   {Esc while the help, an inspect popup or a chord is open}. Everything else waits behind the leader.
+- One dock answers a keydown: the one a pointer last pressed in, claimed in the capture phase so of
+  nested docks the innermost wins; before any press (or once that dock is gone), every dock not
+  nested in another.
 - A key aimed at an editable never acts, so text undo and typing stay native; that rule and the
   footprint's are the library's: `~/s/ev/web_std/docs/ARCHITECTURE.md`, "The `keymap` library".
 - Which key a keydown is, across layouts, is the library's rule (same section), not tilers'.

@@ -148,7 +148,7 @@ fn saving_tracks_what_the_host_wired() {
 		assert!(!press(&mut s, seq(keys))[1].prevent_default, "no storage, no hook: {keys} is unbound");
 	}
 	assert!(
-		!help_rows(&mut s).iter().any(|r| r.sequence == "Alt+Z S" || r.sequence == "Alt+Z Shift+S"),
+		!help_rows(&mut s).iter().any(|r| r.sequence == "Alt+z s" || r.sequence == "Alt+z Shift+s"),
 		"{:?}",
 		help_rows(&mut s)
 	);
@@ -159,8 +159,8 @@ fn saving_tracks_what_the_host_wired() {
 	};
 	let (mut s, _) = edited(cached);
 	let rows = help_rows(&mut s);
-	assert!(rows.iter().any(|r| r.sequence == "Alt+Z S"), "{rows:?}");
-	assert!(!rows.iter().any(|r| r.sequence == "Alt+Z Shift+S"), "publish needs `on_publish`: {rows:?}");
+	assert!(rows.iter().any(|r| r.sequence == "Alt+z s"), "{rows:?}");
+	assert!(!rows.iter().any(|r| r.sequence == "Alt+z Shift+s"), "publish needs `on_publish`: {rows:?}");
 	let outs = press(&mut s, seq("Alt+z S"));
 	assert!(!outs[1].prevent_default, "an unbound publish is inert");
 	assert!(s.notice().is_none(), "an unbound publish says nothing");
@@ -223,13 +223,16 @@ fn custom_command_in_a_nested_scope() {
 			label: "extra".to_owned(),
 			children: vec![Binding {
 				on: Chord { key: "y", .. }.into(),
-				node: Node::Run(Command::Custom {
-					label: "Mark",
-					run: Rc::new(move |s: &mut PackedState| {
-						assert!(s.grid().cells.len() == 2, "runs against the live layout");
-						*count.borrow_mut() += 1;
-					}),
-				}),
+				node: Node::Run {
+					id: "mark".to_owned(),
+					command: Command::Custom {
+						label: "Mark",
+						run: Rc::new(move |s: &mut PackedState| {
+							assert!(s.grid().cells.len() == 2, "runs against the live layout");
+							*count.borrow_mut() += 1;
+						}),
+					},
+				},
 			}],
 		},
 	});
@@ -237,7 +240,8 @@ fn custom_command_in_a_nested_scope() {
 	assert!(press(&mut s, seq("Alt+z x y")).iter().all(|o| o.prevent_default));
 	assert_eq!(*ran.borrow(), 1);
 	assert!(help_rows(&mut s).contains(&HelpRow {
-		sequence: "Alt+Z X Y".into(),
+		id: "mark".into(),
+		sequence: "Alt+z x y".into(),
 		label: "Mark".into()
 	}));
 }
@@ -275,4 +279,21 @@ fn undo_mid_resize_leaves_the_gesture_intact() {
 	s.resize_move((620.0, 580.0));
 	s.resize_end();
 	assert!(s.grid().overlaps().is_none());
+}
+
+#[test]
+fn only_the_dock_last_pressed_in_answers() {
+	let (mut outer, _) = edited(Config::default());
+	let (mut inner, _) = edited(Config::default());
+	assert!(press(&mut outer, seq("Alt+z"))[0].prevent_default, "before any press every un-nested dock answers");
+	press(&mut outer, seq("Escape"));
+	inner.claim_keys();
+	assert!(!press(&mut outer, seq("Alt+z"))[0].prevent_default, "the other dock was pressed last");
+	assert!(press(&mut inner, seq("Alt+z"))[0].prevent_default);
+	outer.claim_keys();
+	let left = press(&mut inner, seq("u")).remove(0);
+	assert!(!left.prevent_default, "a chord open in a dock pressed away from closes, and the key passes");
+	assert!(left.changed, "a chord open in a dock pressed away from closes, and the key passes");
+	drop(outer);
+	assert!(press(&mut inner, seq("Alt+z"))[0].prevent_default, "the owner is gone: un-nested docks answer again");
 }

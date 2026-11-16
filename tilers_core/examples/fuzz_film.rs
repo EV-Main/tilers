@@ -55,7 +55,7 @@ const C_FG: &str = "#ddd";
 /// `--tl-shadow-bg` is `rgba(160,160,160,0.18)`; flattened over the tile bg so the landing cell is
 /// legible at film scale.
 const C_SHADOW: &str = "#3d3d3d";
-const BUCKETS: [&str; 33] = [
+const BUCKETS: [&str; 34] = [
 	"Measure",
 	"Place",
 	"AddTab",
@@ -89,6 +89,7 @@ const BUCKETS: [&str; 33] = [
 	"band xl",
 	"Scroll",
 	"DragEnterTab",
+	"Carry",
 ];
 /// Every flag also reads a `FILM_*` variable, so the film is scriptable from an env without a
 /// second code path; clap's precedence puts the flag first.
@@ -196,6 +197,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 			A::SetMins { .. } => 8,
 			A::Scroll { .. } => 31,
 			A::DragEnterTab { .. } => 32,
+			A::Carry { .. } => 33,
 		};
 	if let A::Drag { grab, commit, .. } = action {
 		m |= 1 << if world.resolved.is_empty() { 10 } else { 9 };
@@ -268,6 +270,13 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 		A::SetMins { panel, min } => format!("SetMins {} = {}", panel.0, min_label(min)),
 		A::Scroll { y } => format!("Scroll to {y:.0}px"),
 		A::DragEnterTab { group, panel } => format!("DragEnterTab {} in g{}", panel.0, group.0),
+		A::Carry { panel, commit, .. } => {
+			let what = match panel {
+				actions::Carried::New { w, h, .. } => format!("a new {w}x{h}"),
+				actions::Carried::Hosted(p) => p.0.clone(),
+			};
+			format!("Carry {what}{}", if *commit { "" } else { " [ended elsewhere]" })
+		}
 	}
 }
 

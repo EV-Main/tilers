@@ -89,9 +89,12 @@ pub struct Help {
 }
 
 pub(crate) fn default_keymap() -> Keymap {
-	let run = |on: Trigger, b: Builtin| Binding {
+	let run = |on: Trigger, id: &str, b: Builtin| Binding {
 		on,
-		node: Node::Run(Command::Builtin(b)),
+		node: Node::Run {
+			id: id.to_owned(),
+			command: Command::Builtin(b),
+		},
 	};
 	let key = |key: &'static str| Trigger::from(Chord { key, .. });
 	let cmd = |key: &'static str| Trigger {
@@ -108,20 +111,20 @@ pub(crate) fn default_keymap() -> Keymap {
 				node: Node::Scope {
 					label: "leader".to_owned(),
 					children: vec![
-						run(key("u"), Builtin::Undo),
-						run(key("U"), Builtin::Redo),
-						run(key("f"), Builtin::Maximize),
-						run(key("Backspace"), Builtin::Close),
-						run(key("d"), Builtin::Inspect),
-						run(key("s"), Builtin::Cache),
-						run(key("S"), Builtin::Publish),
-						run(key("?"), Builtin::Help),
+						run(key("u"), "undo", Builtin::Undo),
+						run(key("U"), "redo", Builtin::Redo),
+						run(key("f"), "maximize", Builtin::Maximize),
+						run(key("Backspace"), "close", Builtin::Close),
+						run(key("d"), "inspect", Builtin::Inspect),
+						run(key("s"), "cache", Builtin::Cache),
+						run(key("S"), "publish", Builtin::Publish),
+						run(key("?"), "help", Builtin::Help),
 					],
 				},
 			},
-			run(cmd("z"), Builtin::Undo),
-			run(Chord { key: "y", ctrl: true, .. }.into(), Builtin::Redo),
-			run(cmd("Z"), Builtin::Redo),
+			run(cmd("z"), "undo-chord", Builtin::Undo),
+			run(Chord { key: "y", ctrl: true, .. }.into(), "redo-chord", Builtin::Redo),
+			run(cmd("Z"), "redo-shift-chord", Builtin::Redo),
 		],
 	}
 }

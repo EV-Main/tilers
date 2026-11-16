@@ -179,6 +179,9 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	let tab_drops = frames.iter().filter(|f| f.tab_drop).count();
 	let hints = shadows + tab_drops;
 	match state.ghost(&titles) {
+		// A carry's ghost is the browser's drag image: its hints are the only witness of arming.
+		None if state.carrying() && hints > 1 => Err(format!("a carry wants at most one landing hint, got {shadows} shadow(s) and {tab_drops} tab-drop(s)")),
+		None if state.carrying() => Ok(()),
 		Some(_) if hints > 1 || (hints != 1 && !maximized) => Err(format!("armed drag wants exactly one landing hint, got {shadows} shadow(s) and {tab_drops} tab-drop(s)")),
 		None if hints != 0 => Err(format!("no ghost, yet {shadows} shadow(s) and {tab_drops} tab-drop(s) are painted")),
 		_ => Ok(()),
