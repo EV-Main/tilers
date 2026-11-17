@@ -358,7 +358,7 @@ impl PackedState {
 	/// Store the root's origin (to map pointer→grid space) and its content box, then reflow the
 	/// grid to fill it: classify the width into a responsive band, stretch `cols` across the
 	/// container's width (a horizontal step is `width / cols`, cols scaled per band; a vertical one is
-	/// [`Config::row_h_rem`], stretched by [`step`](Self::step)), and refloor tiles onto the new step. `framed`: see [`framed`].
+	/// [`Config::row_h_rem`], stretched by `step`), and refloor tiles onto the new step. `framed`: the view's edges may lie under a host's grips.
 	pub fn set_measure(&mut self, origin: (f64, f64), size: (f64, f64), framed: bool) {
 		self.root_origin = origin;
 		self.root_size = size;

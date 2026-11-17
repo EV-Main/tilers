@@ -25,7 +25,7 @@ pub fn Positions(market: Signal<Market>) -> Element {
 	let notional = qty_abs * mark;
 	let margin = notional / LEV;
 	let pnl = m.unrealized();
-	let roe = if margin != 0.0 { pnl / margin * 100.0 } else { 0.0 };
+	let roe = if margin == 0.0 { 0.0 } else { pnl / margin * 100.0 };
 	// liq: price at which loss eats the maintenance buffer. long below entry, short above.
 	let liq = if long { entry * (1.0 - 1.0 / LEV + MMR) } else { entry * (1.0 + 1.0 / LEV - MMR) };
 

@@ -136,10 +136,10 @@ impl PackedGrid {
 	}
 
 	/// The one resize: tile `idx`'s vertical edges moved toward `left`/`right` and its height set to
-	/// `h`, from this (packed) layout. An edge growing into a neighbour pushes it (see [`move_edge`]);
+	/// `h`, from this (packed) layout. An edge growing into a neighbour pushes it (see `move_edge`);
 	/// the height grows freely and settling pushes the stack below down. A pure function of `(self, args)`, so a gesture replayed from its press layout is
 	/// path-independent. Ranks are left as they were: the caller commits them with
-	/// [`reassign_ranks`](Self::reassign_ranks) once the edit is final.
+	/// `reassign_ranks` once the edit is final.
 	pub fn resized(&self, idx: usize, left: u32, right: u32, h: u32, cols: u32) -> PackedGrid {
 		self.assert_packed();
 		let mut out = self.clone();

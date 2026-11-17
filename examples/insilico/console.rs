@@ -115,7 +115,7 @@ fn cat(line: &str) -> (&'static str, &'static str) {
 /// tick clock -> [hh:mm:ss]
 fn stamp(t: u64) -> String {
 	let s = t % 60;
-	let m = (t / 60) % 60;
-	let h = (t / 3600) % 24;
+	let m = t.div_euclid(60) % 60;
+	let h = t.div_euclid(3600) % 24;
 	format!("[{h:02}:{m:02}:{s:02}]")
 }

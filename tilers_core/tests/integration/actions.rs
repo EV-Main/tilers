@@ -288,8 +288,8 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		}
 		PLACE => {
 			// Sized as a fraction of what shows, so a tile stays a pane rather than a sliver.
-			let w = 1 + frng.below(world.state.cols() / 2);
-			let h = 1 + frng.below(world.state.rows() / 2);
+			let w = 1 + frng.below(world.state.cols().div_euclid(2));
+			let h = 1 + frng.below(world.state.rows().div_euclid(2));
 			Action::Place { w, h, min: min(frng, w, h) }
 		}
 		ADD_TAB => Action::AddTab {
@@ -429,7 +429,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		CARRY => {
 			let panel = match cells.is_empty() || frng.below(3) != 0 {
 				true => {
-					let (w, h) = (1 + frng.below(world.state.cols() / 2), 1 + frng.below(world.state.rows() / 2));
+					let (w, h) = (1 + frng.below(world.state.cols().div_euclid(2)), 1 + frng.below(world.state.rows().div_euclid(2)));
 					Carried::New { w, h, min: min(frng, w, h) }
 				}
 				false => {

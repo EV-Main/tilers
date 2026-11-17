@@ -27,7 +27,7 @@ pub fn OrderBook(market: Signal<Market>) -> Element {
 	}
 
 	// Seed changes slowly so the ladder shape is coherent between ticks rather than reshuffling.
-	let key = mid.to_bits() ^ (m.t / 4);
+	let key = mid.to_bits() ^ m.t.div_euclid(4);
 
 	let build = |up: bool, drain: f64| -> Vec<Row> {
 		let mut s = key ^ if up { 0xa5a5_a5a5 } else { 0x5a5a_5a5a };

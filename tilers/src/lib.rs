@@ -10,8 +10,8 @@
 //!
 //! - Always available: [`core`] re-exports [`tilers_core`] — the framework-agnostic engine
 //!   (grid model, gesture reducer, seed cache, CSS). A bare `tilers` (no features) is just this.
-//! - `dioxus` feature → [`dioxus`] re-exports [`tilers_dioxus`] (the Dioxus binding).
-//! - `leptos` feature → [`leptos`] re-exports [`tilers_leptos`] (the Leptos binding).
+//! - `dioxus` feature → `dioxus` re-exports [`tilers_dioxus`](https://docs.rs/tilers_dioxus) (the Dioxus binding).
+//! - `leptos` feature → `leptos` re-exports [`tilers_leptos`](https://docs.rs/tilers_leptos) (the Leptos binding).
 //!
 //! Depending on this facade vs. the individual crates is purely ergonomic — the code is identical
 //! either way.

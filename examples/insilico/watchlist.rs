@@ -55,7 +55,7 @@ pub fn Watchlist(market: Signal<Market>) -> Element {
 							.collect();
 						let px = *path.last().unwrap_or(&(m.px * mult));
 						let first = *path.first().unwrap_or(&px);
-						let chg = if first != 0.0 { (px - first) / first * 100.0 } else { 0.0 };
+						let chg = if first == 0.0 { 0.0 } else { (px - first) / first * 100.0 };
 						let up = chg >= 0.0;
 						let col = if up { UP } else { DOWN };
 						let arrow = if up { "▲" } else { "▼" };

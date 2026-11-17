@@ -44,7 +44,7 @@ pub fn Trades(market: Signal<Market>) -> Element {
 						let weight = if is_whale { 700 } else { 500 };
 						let arrow = if tr.buy { "\u{25B2}" } else { "\u{25BC}" };
 						let secs = tr.t % 60;
-						let mins = (tr.t / 60) % 60;
+						let mins = tr.t.div_euclid(60) % 60;
 						let qty_col = if is_whale { col } else { "#9bb3ad" };
 						rsx! {
 							div {

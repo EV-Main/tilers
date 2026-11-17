@@ -53,6 +53,8 @@
           enable = true;
           lastSupportedVersion = "nightly-2026-06-18";
           jobs.default = true;
+          jobs.warnings.exclude = [ "code-duplication" ];
+          jobs.warnings.augment = [{ name = "code-duplication"; args.excludePatterns = [ "docs/refs/**" ]; }]; # the references' sources, checked out as submodules
           jobs.errors.exclude = [ "tilers_grafana-plugin-test" "tilers_grafana-plugin-typecheck" ]; # the plugin has no tests
           jobs.errors.augment = [
             (pluginTypecheck // {

@@ -29,8 +29,8 @@ pub fn News(market: Signal<Market>) -> Element {
 						// derive a plausible "Xm ago": older items (lower index) are further back.
 						let age = (total - 1 - i) as u64;
 						let mins = age * 2 + (now % 3);
-						let ago = if mins == 0 { "now".to_string() } else if mins < 60 { format!("{mins}m ago") } else { format!("{}h ago", mins / 60) };
-						let clock = format!("{:02}:{:02}", (9 + (now / 60) % 14), now % 60);
+						let ago = if mins == 0 { "now".to_string() } else if mins < 60 { format!("{mins}m ago") } else { format!("{}h ago", mins.div_euclid(60)) };
+						let clock = format!("{:02}:{:02}", (9 + now.div_euclid(60) % 14), now % 60);
 						// split body so cashtags can render as pills
 						let words: Vec<String> = body.split(' ').map(|w| w.to_string()).collect();
 						rsx! {

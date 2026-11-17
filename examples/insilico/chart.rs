@@ -20,7 +20,7 @@ pub fn Chart(market: Signal<Market>) -> Element {
 	let first = *h.first().unwrap_or(&last);
 	let day_open = if n > 0 { h[0] } else { last };
 	let chg = last - first;
-	let chg_pct = if first != 0.0 { chg / first * 100.0 } else { 0.0 };
+	let chg_pct = if first == 0.0 { 0.0 } else { chg / first * 100.0 };
 	let up = last >= prev;
 	let day_up = chg >= 0.0;
 	let last_col = if up { UP } else { DOWN };

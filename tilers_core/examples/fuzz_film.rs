@@ -133,7 +133,7 @@ fn main() {
 			let hits = hit(a, world);
 			mask |= hits;
 			for (i, c) in counts.iter_mut().enumerate() {
-				*c += ((hits >> i) & 1) as u64;
+				*c += (hits >> i) & 1;
 			}
 		};
 		if let Err(f) = sim::run(seed, size, false, &mut observe) {

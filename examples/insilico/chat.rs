@@ -128,6 +128,6 @@ fn user_color(name: &str) -> &'static str {
 
 /// `t` is a tick counter, not wall-clock — fold it into a believable HH:MM.
 fn stamp(t: u64) -> String {
-	let mins = t / 4;
-	format!("{:02}:{:02}", 9 + (mins / 60) % 13, mins % 60)
+	let mins = t.div_euclid(4);
+	format!("{:02}:{:02}", 9 + mins.div_euclid(60) % 13, mins % 60)
 }
