@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test'
 
 const DOCK = 'a/evmain-tilers-app/d/tl-fixture'
 const PANELS = 9
-const FIXTURE = JSON.parse(readFileSync(new URL('../tilers_grafana/plugin/provisioning/fixtures/tl-fixture.json', import.meta.url)))
+const FIXTURE = JSON.parse(readFileSync(new URL('../../tilers_grafana/plugin/provisioning/fixtures/tl-fixture.json', import.meta.url)))
 /** Panel ids by their `dock` key. */
 const AUTHORED = FIXTURE.panels.filter((p) => p.dock?.minHRem).map((p) => [p.id, p.dock.minHRem])
 const COMPILED = FIXTURE.panels.filter((p) => p.dock?.precompile).map((p) => p.id)

@@ -88,3 +88,15 @@ graphify-out/
 ### could be used for initial debugging of apps using `config` crate
 /config.toml
 **/rustc-ice*
+## JavaScript / Node
+./*/node_modules/
+**/node_modules/
+**/.pnpm-store/
+**/.pnpm-debug.log
+**/npm-debug.log*
+**/yarn-error.log
+**/dist/
+**/.next/
+**/.turbo/
+**/.cache/
+.direnv/corepack/

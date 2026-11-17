@@ -30,11 +30,43 @@
             };
           };
         };
+        js = v_flakes.js { inherit pkgs; packages = [ "tilers_grafana/plugin" ]; node = pkgs.nodejs_24; };
+        # its imports of src/wasm (gitignored) resolve only once the glue is built
+        pluginTypecheck = pkgs.lib.findFirst (p: p.name == "tilers_grafana-plugin-typecheck") (throw "js lists the plugin") js.particles.errors;
+        e2e = name: projects: serve: ready: js.playwright {
+          inherit name;
+          package = "e2e";
+          config = "tests";
+          runtimeInputs = [ rust pkgs.mold pkgs.pkg-config pkgs.openssl wasm-bindgen-cli pkgs.curl pkgs.util-linux pkgs.python3 ];
+          run = ''
+            cd ..
+            setsid ${serve} >&2 &
+            server=$!
+            trap 'kill -- -$server' EXIT
+            until curl -sf ${ready} >/dev/null; do kill -0 $server; sleep 1; done
+            cd e2e
+            playwright test -c tests ${pkgs.lib.concatMapStringsSep " " (p: "--project ${p}") projects} "$@"
+          '';
+        };
         github = v_flakes.github {
-          inherit pkgs pname rs;
+          inherit pkgs pname rs js;
           enable = true;
           lastSupportedVersion = "nightly-2026-06-18";
           jobs.default = true;
+          jobs.errors.exclude = [ "tilers_grafana-plugin-test" "tilers_grafana-plugin-typecheck" ]; # the plugin has no tests
+          jobs.errors.augment = [
+            (pluginTypecheck // {
+              prepare = pkgs.writeShellApplication {
+                name = "tilers_grafana-plugin-prepare";
+                text = "${pkgs.lib.getExe pluginWasm}\n${pkgs.lib.getExe pluginTypecheck.prepare}";
+              };
+            })
+            (e2e "e2e" [ "chromium" "firefox" ]
+              # built first: `dx serve` answers with its loading page while it builds
+              "sh -c '${pkgs.lib.getExe pkgs.dioxus-cli} build --example insilico --package tilers_dioxus --platform web && exec python3 -m http.server 8111 --bind 127.0.0.1 -d target/dx/insilico/debug/web/public'"
+              "http://127.0.0.1:8111/")
+            (e2e "e2e-grafana" [ "grafana" ] (pkgs.lib.getExe devGrafana) "http://127.0.0.1:54581/api/health")
+          ];
           # The film is generated and committed, so nothing else notices when the generator moves
           # under it. Daily rather than per-run: it builds the workspace to redraw one SVG.
           jobs.other.augment = [{
@@ -53,7 +85,7 @@
           rootDir = ./.;
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };
-        combined = v_flakes.utils.combine { inherit rust; modules = [ rs github readme ]; };
+        combined = v_flakes.utils.combine { inherit rust; modules = [ rs js github readme ]; };
 
         # The crate graph pins wasm-bindgen =0.2.125, and the CLI must match it; nixpkgs carries another.
         wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
@@ -73,6 +105,15 @@
           url = "https://dl.grafana.com/oss/release/grafana-12.3.1.linux-amd64.tar.gz";
           hash = "sha256-PKOxXRmqtLVneGsQO8phLXnacXaRRWfDQDPu3g9f6Lo=";
         };
+        pluginWasm = pkgs.writeShellApplication {
+          name = "plugin-wasm";
+          runtimeInputs = [ rust pkgs.git pkgs.mold pkgs.pkg-config pkgs.openssl wasm-bindgen-cli ];
+          text = ''
+            root="$(git rev-parse --show-toplevel)"
+            cargo b -p tilers_grafana --target wasm32-unknown-unknown
+            wasm-bindgen --target web --out-dir "$root/tilers_grafana/plugin/src/wasm" "$root/target/wasm32-unknown-unknown/debug/tilers_grafana.wasm"
+          '';
+        };
         # The plugin against a local Grafana, provisioned with a testdata twin of devops' `ev-deployments`.
         # Rust changes need a restart; the TS side rebuilds on save.
         devGrafana = pkgs.writeShellApplication {
@@ -82,8 +123,7 @@
             root="$(git rev-parse --show-toplevel)"
             plugin="$root/tilers_grafana/plugin"
             state="$root/tmp/grafana"
-            cargo b -p tilers_grafana --target wasm32-unknown-unknown
-            wasm-bindgen --target web --out-dir "$plugin/src/wasm" "$root/target/wasm32-unknown-unknown/debug/tilers_grafana.wasm"
+            ${pkgs.lib.getExe pluginWasm}
             [ -d "$plugin/node_modules" ] || npm --prefix "$plugin" ci
             rm -rf "$plugin/dist" # so the wait below sees this run's build
             mkdir -p "$state/plugins"

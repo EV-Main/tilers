@@ -1,0 +1,53 @@
+description: Install Nix with the repo's v_flakes binary cache; optionally Swatinem/rust-cache keyed on the dev shell's toolchain
+inputs:
+  rust-cache:
+    default: ""
+    description: rust-cache shared-key; empty leaves rust-cache off
+    required: false
+name: nix-env
+runs:
+  steps:
+    - name: Lean cache setup
+      run: |
+        mkdir -p /tmp/nix-lean-cache
+        chmod 0777 /tmp/nix-lean-cache
+        printf '#!/bin/sh\nexport PATH=/nix/var/nix/profiles/default/bin:$PATH\nnix copy --to "file:///tmp/nix-lean-cache?compression=zstd&parallel-compression=true" $OUT_PATHS || true\n' > /tmp/nix-lean-pbh.sh
+        chmod 0755 /tmp/nix-lean-pbh.sh
+      shell: bash
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+      with:
+        extra-conf: |
+          lazy-trees = true
+          post-build-hook = /tmp/nix-lean-pbh.sh
+          extra-substituters = file:///tmp/nix-lean-cache
+          extra-trusted-substituters = file:///tmp/nix-lean-cache
+          require-sigs = false
+    - if: github.ref_name != github.event.repository.default_branch
+      name: Restore lean nix cache
+      uses: actions/cache/restore@v5
+      with:
+        key: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ github.run_id }}
+        path: /tmp/nix-lean-cache
+        restore-keys: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
+    - if: github.ref_name == github.event.repository.default_branch
+      name: Lean nix cache (built-only paths)
+      uses: actions/cache@v5
+      with:
+        key: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ github.run_id }}
+        path: /tmp/nix-lean-cache
+        restore-keys: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
+    - if: inputs.rust-cache != ''
+      name: Toolchain on PATH
+      run: nix develop --command bash -c 'dirname "$(command -v rustc)" >> "$GITHUB_PATH"'
+      shell: bash
+    - if: inputs.rust-cache != ''
+      name: No rustc wrapper
+      run: echo RUSTC_WRAPPER= >> "$GITHUB_ENV"
+      shell: bash
+    - if: inputs.rust-cache != ''
+      uses: Swatinem/rust-cache@v2
+      with:
+        save-if: ${{ github.ref_name == github.event.repository.default_branch }}
+        shared-key: ${{ inputs.rust-cache }}
+  using: composite

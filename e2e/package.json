@@ -3,7 +3,7 @@
   "private": true,
   "description": "Cross-browser regression test: the PackedArea window-keydown listener must recognize its binds in both Chromium and Firefox.",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test -c tests"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0"

@@ -39,13 +39,20 @@ jobs:
             extra-substituters = file:///tmp/nix-lean-cache
             extra-trusted-substituters = file:///tmp/nix-lean-cache
             require-sigs = false
-      - if: steps.guard.outputs.cache-hit != 'true'
+      - if: steps.guard.outputs.cache-hit != 'true' && (github.ref_name != github.event.repository.default_branch)
+        name: Restore lean nix cache
+        uses: actions/cache/restore@v5
+        with:
+          key: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ github.run_id }}
+          path: /tmp/nix-lean-cache
+          restore-keys: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
+      - if: steps.guard.outputs.cache-hit != 'true' && (github.ref_name == github.event.repository.default_branch)
         name: Lean nix cache (built-only paths)
         uses: actions/cache@v5
         with:
-          key: nix-lean-${{ runner.os }}-${{ github.run_id }}
+          key: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-${{ github.run_id }}
           path: /tmp/nix-lean-cache
-          restore-keys: nix-lean-${{ runner.os }}-
+          restore-keys: nix-lean-${{ runner.os }}-${{ hashFiles('flake.lock') }}-
       - if: steps.guard.outputs.cache-hit != 'true'
         name: Regenerate docs/.readme_assets/assets/fuzz.svg and compare
         run: |
@@ -69,6 +76,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+      - name: Install tokei
+        run: cargo install tokei
       - env:
           loc_gist_token: ${{ secrets.loc_gist_token }}
         name: Ensure loc_gist_token secret is configured
@@ -84,29 +93,13 @@ jobs:
             echo "::error::Bulk-provision all repos: https://github.com/valeratrades/nix/tree/e4338bf5943d7403b949a8e079f9073987d9cd68/home/scripts/shared_github_secrets.bash"
             exit 1
           fi
-      - name: Install tokei
-        run: cargo install tokei
-      - id: count
-        name: Count lines of code
-        run: |
-          # Extract repository name (e.g., "valeratrades/readme-fw" -> "readme-fw")
-          PNAME="${GITHUB_REPOSITORY##*/}"
-          echo "pname=$PNAME" >> $GITHUB_OUTPUT
-
-          LOC=$(tokei --output json | jq '.Total.code')
-          echo "loc=$LOC" >> $GITHUB_OUTPUT
-          echo "Lines of code for $PNAME: $LOC"
-
-          # Generate JSON with project-specific filename
-          echo "{\"schemaVersion\": 1, \"label\": \"LoC\", \"message\": \"$LOC\", \"color\": \"lightblue\"}" > ${PNAME}-loc.json
-      - name: Display generated JSON
-        run: cat ${{ steps.count.outputs.pname }}-loc.json
       - env:
           GH_TOKEN: ${{ secrets.loc_gist_token }}
-        name: Update gist
+        name: Update badge gist
         run: |
-          F="${{ steps.count.outputs.pname }}-loc.json"
-          gh api -X PATCH gists/b48e6f02c61942200e7d1e3eeabf9bcb -f "files[$F][content]=$(cat "$F")" --silent
+          PNAME="${GITHUB_REPOSITORY##*/}"
+          gh api -X PATCH gists/b48e6f02c61942200e7d1e3eeabf9bcb --silent \
+          -f "files[$PNAME-loc.json][content]={\"schemaVersion\": 1, \"label\": \"LoC\", \"message\": \"$(tokei --output json | jq .Total.code)\", \"color\": \"lightblue\"}"
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@main
 name: Other

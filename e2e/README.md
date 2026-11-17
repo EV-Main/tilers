@@ -35,33 +35,14 @@ before.
 
 ## Run
 
-Needs a host that mounts `PackedArea`. Serve the bundled example:
-
 ```sh
-dx serve --example insilico --package tilers_dioxus --platform web --port 8111
+nix run .#test -- e2e           # chromium + firefox against the insilico example, which it serves
+nix run .#test -- e2e-grafana   # the grafana project against `nix run .#dev -- grafana`, which it starts
 ```
 
-then, from this dir:
+Both run nixpkgs' Playwright and its pinned browsers (`js.playwright` in `flake.nix`). Against any
+other host that mounts `PackedArea` (e.g. the real REA dashboard), from `tests/`:
 
 ```sh
-npm install            # pinned to @playwright/test 1.63.0 (matches the nix browser set)
-npm test
+TILERS_URL=http://127.0.0.1:8122/ playwright test --project chromium --project firefox
 ```
-
-Point it at any other host (e.g. the real REA dashboard) with `TILERS_URL`:
-
-```sh
-TILERS_URL=http://127.0.0.1:8122/ npm test
-```
-
-## NixOS
-
-Playwright's own browser downloads don't run on NixOS; use the nix-provided set instead. The pin
-`@playwright/test@1.63.0` matches `chromium-1243`/`firefox-1543`, which `playwright-driver.browsers`
-ships. Export its store path before running:
-
-```sh
-export PLAYWRIGHT_BROWSERS_PATH=$(nix eval --raw nixpkgs#playwright-driver.browsers)
-```
-
-(`PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1` is set automatically in `playwright.config.mjs`.)
