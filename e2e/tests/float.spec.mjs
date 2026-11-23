@@ -39,6 +39,15 @@ test('⧉ lifts a tile into the float layer and the grid fills in, its content k
 	expect(shown.x).toBeCloseTo(shell.x, 0)
 	expect(shown.width).toBeCloseTo(shell.width, 0)
 	expect(shown.y + shown.height).toBeCloseTo(shell.y + shell.height, 0)
+
+	// Its frame paints its border and grips over the content, so its body must let the content through.
+	const hit = await page.evaluate(({ x, y }) => {
+		const el = document.elementFromPoint(x, y)
+		return { content: el.closest('.tl-render-overlay') !== null, frame: el.closest('.tl-float') !== null }
+	}, { x: shell.x + shell.width / 2, y: shell.y + shell.height / 2 })
+	expect(hit, "a float's body hits its content, not its frame").toEqual({ content: true, frame: false })
+	const paint = await floats(page).evaluate((f) => [getComputedStyle(f).backgroundColor, getComputedStyle(f.querySelector('.tl-group')).backgroundColor])
+	expect(paint, 'its frame is see-through over the content').toEqual(['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'])
 })
 
 test('a float stays put while the dock scrolls under it', async ({ page }) => {

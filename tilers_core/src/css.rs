@@ -54,7 +54,7 @@ pub const CSS: &str = r#"
 	width: max(100%, var(--tl-extent-w, 0px)); height: max(100%, var(--tl-extent-h, 0px)); }
 /* A float: its frame paints over its content, so its body is see-through and only its strip and
    grips take the pointer. */
-.tl-float { display: block; background: transparent; pointer-events: none; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.tl-tile.tl-float { display: block; background: transparent; pointer-events: none; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .tl-float .tl-group { background: transparent; }
 .tl-float .tl-header, .tl-float .tl-resize-handle, .tl-float .tl-resize-left, .tl-float .tl-resize-right,
 .tl-float .tl-resize-bottom, .tl-float .tl-resize-fold, .tl-float .tl-resize-wall { pointer-events: auto; }
