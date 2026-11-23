@@ -1,5 +1,5 @@
 # tilers
-![Minimum Supported Rust Version](https://img.shields.io/badge/nightly-1.92+-ab6000.svg)
+![Minimum Supported Rust Version](https://img.shields.io/badge/nightly-2026--06--29+-ab6000.svg)
 [<img alt="crates.io" src="https://img.shields.io/crates/v/tilers.svg?color=fc8d62&logo=rust" height="20" style=flat-square>](https://crates.io/crates/tilers)
 [<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs&style=flat-square" height="20">](https://docs.rs/tilers)
 ![Lines Of Code](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/valeratrades/b48e6f02c61942200e7d1e3eeabf9bcb/raw/tilers-loc.json)
@@ -99,7 +99,7 @@ api.cols(); api.band(); api.tab_ids();
 
 <br>
 
-<sup>Links for devs:</sup>
+#### Dev links
 - <sup><a href="./docs/ARCHITECTURE.md">architecture</a></sup>
 - <sup><a href="https://github.com/EV-Main/.github/blob/main/code/STYLE.md">style</a></sup>
 - <sup><a href="https://github.com/EV-Main/.github/tree/main/code/conventions">conventions</a></sup>

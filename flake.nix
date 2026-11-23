@@ -48,10 +48,11 @@
             playwright test -c tests ${pkgs.lib.concatMapStringsSep " " (p: "--project ${p}") projects} "$@"
           '';
         };
+        oldestSupportedVersion = "nightly-2026-06-29";
         github = v_flakes.github {
           inherit pkgs pname rs js;
           enable = true;
-          lastSupportedVersion = "nightly-2026-06-18";
+          inherit oldestSupportedVersion;
           jobs.default = true;
           jobs.warnings.exclude = [ "code-duplication" ];
           jobs.warnings.augment = [{ name = "code-duplication"; args.excludePatterns = [ "docs/refs/**" ]; }]; # the references' sources, checked out as submodules
@@ -83,7 +84,7 @@
         readme = v_flakes.readme-fw {
           inherit pkgs pname;
           defaults = true;
-          lastSupportedVersion = "nightly-1.92";
+          inherit oldestSupportedVersion;
           rootDir = ./.;
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };

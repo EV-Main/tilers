@@ -11,7 +11,7 @@ runs:
       run: |
         mkdir -p /tmp/nix-lean-cache
         chmod 0777 /tmp/nix-lean-cache
-        printf '#!/bin/sh\nexport PATH=/nix/var/nix/profiles/default/bin:$PATH\nnix copy --to "file:///tmp/nix-lean-cache?compression=zstd&parallel-compression=true" $OUT_PATHS || true\n' > /tmp/nix-lean-pbh.sh
+        printf '#!/bin/sh\nexport PATH=/nix/var/nix/profiles/default/bin:$PATH\necho $OUT_PATHS >> /tmp/nix-lean-cache/built\nnix copy --to "file:///tmp/nix-lean-cache?compression=zstd&parallel-compression=true" $OUT_PATHS || true\n' > /tmp/nix-lean-pbh.sh
         chmod 0755 /tmp/nix-lean-pbh.sh
       shell: bash
     - name: Install Nix
@@ -19,8 +19,9 @@ runs:
       with:
         extra-conf: |
           lazy-trees = true
+          extra-substituters = https://valeratrades.cachix.org file:///tmp/nix-lean-cache
+          extra-trusted-public-keys = valeratrades.cachix.org-1:gXVwhzO5YB+BaiEJYT48qZgzdaErGQew6xtZcz4Fo1Q=
           post-build-hook = /tmp/nix-lean-pbh.sh
-          extra-substituters = file:///tmp/nix-lean-cache
           extra-trusted-substituters = file:///tmp/nix-lean-cache
           require-sigs = false
     - if: github.ref_name != github.event.repository.default_branch
