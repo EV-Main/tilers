@@ -6,8 +6,9 @@
 use crate::model::packed::PackedGrid;
 
 /// Bump when the on-disk shape changes; `load` would migrate older payloads. v2: cell floors are
-/// derived, so v1's stored `min_w`/`min_h` are ignored on load.
-pub const SCHEMA_VERSION: u32 = 2;
+/// derived, so v1's stored `min_w`/`min_h` are ignored on load. v3: a cell may be collapsed, which
+/// a v2 reader would open at the spine's width, losing the width it keeps.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Versioned wrapper actually written to storage.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -55,6 +56,7 @@ mod tests {
 		let gid = g.mint_group_id();
 		g.place(Group::new(gid, PanelId("b".into())), 2, 4, (1, 1), 6);
 		g.add_tab(GroupId(0), PanelId("c".into()));
+		g.cells[1].collapsed = Some(4);
 		g
 	}
 

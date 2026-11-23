@@ -92,7 +92,8 @@ impl World {
 		let sh = self.state.frames(&HashMap::new()).iter().filter(|f| !f.shadow && !f.style.contains('%')).find_map(|f| {
 			let c = cells.iter().find(|c| c.group.id == f.gid)?;
 			let at = f.style.find("height:").expect("a placed tile has a px height") + "height:".len();
-			let h: f64 = f.style[at..f.style[at..].find("px").expect("px unit") + at].parse().expect("a number");
+			let s = f.style[at..].trim_start_matches("calc("); // inset by the gap
+			let h: f64 = s[..s.find("px").expect("px unit")].parse().expect("a number");
 			Some(h / c.h as f64)
 		});
 		(sw, sh.unwrap_or(least)) // no tile on screen: nothing to aim at, any row will do

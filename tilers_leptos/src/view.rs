@@ -50,8 +50,19 @@ impl PackedApi {
 		});
 	}
 
-	pub fn close_active(&self, group: GroupId) {
-		self.state.update(|s| s.close_active(group));
+	/// Close `panel`'s tab, and its tile with its last one.
+	pub fn close(&self, panel: &PanelId) {
+		self.state.update(|s| s.close(panel));
+	}
+
+	/// Toggle `group` filling the dock.
+	pub fn maximize(&self, group: GroupId) {
+		self.state.update(|s| s.maximize(group));
+	}
+
+	/// Toggle `group` between its tile and a spine as wide as the title bar is tall.
+	pub fn collapse(&self, group: GroupId) {
+		self.state.update(|s| s.collapse(group));
 	}
 
 	pub fn resize(&self, idx: usize, new_w: u32, new_h: u32) {
@@ -411,7 +422,7 @@ pub fn PackedArea(
 					.map(|g| {
 						view! {
 							<div
-								class="tl-ghost"
+								class=if g.collapsed { "tl-ghost tl-collapsed" } else { "tl-ghost" }
 								style=format!(
 									"left:{}px; top:{}px; width:{}px; height:{}px;",
 									g.left,
@@ -523,6 +534,9 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 	let gid = frame.gid;
 	let idx = frame.idx;
 	let header_class = if frame.tab_drop { "tl-header tl-tab-drop" } else { "tl-header" };
+	let tile_class = if frame.collapsed { "tl-tile tl-collapsed" } else { "tl-tile" };
+	let active = frame.tabs.iter().find(|t| t.active).expect("a tile shows one active tab").id.clone();
+	let shown = active.0.clone();
 	let tabs = frame
 		.tabs
 		.into_iter()
@@ -556,7 +570,7 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 		})
 		.collect_view();
 	view! {
-		<div class="tl-tile" style=frame.style>
+		<div class=tile_class data-panel=shown style=frame.style>
 			<div class="tl-group">
 				<div
 					class=header_class
@@ -602,7 +616,7 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 							class="tl-action"
 							title="Close"
 							on:pointerdown=move |e: web_sys::PointerEvent| e.stop_propagation()
-							on:click=move |_| state.update(|s| s.close_active(gid))
+							on:click=move |_| state.update(|s| s.close(&active))
 						>
 							"✕"
 						</button>

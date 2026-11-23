@@ -40,7 +40,7 @@ impl std::fmt::Display for Command {
 	}
 }
 
-/// Close, maximize and inspect act on the focused pane.
+/// Close, maximize, collapse and inspect act on the focused pane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Builtin {
@@ -48,6 +48,8 @@ pub enum Builtin {
 	Redo,
 	Close,
 	Maximize,
+	/// Toggle the pane between its tile and a spine.
+	Collapse,
 	Inspect,
 	Help,
 	/// Write this band's layout to `localStorage`. Unbound without [`Config::storage_key`](crate::Config::storage_key).
@@ -64,6 +66,7 @@ impl Builtin {
 			Self::Redo => "Redo",
 			Self::Close => "Close pane",
 			Self::Maximize => "Maximize pane",
+			Self::Collapse => "Collapse pane",
 			Self::Inspect => "Inspect pane",
 			Self::Help => "Keybinds",
 			Self::Cache => "Cache layout",
@@ -114,6 +117,7 @@ pub(crate) fn default_keymap() -> Keymap {
 						run(key("u"), "undo", Builtin::Undo),
 						run(key("U"), "redo", Builtin::Redo),
 						run(key("f"), "maximize", Builtin::Maximize),
+						run(key("c"), "collapse", Builtin::Collapse),
 						run(key("Backspace"), "close", Builtin::Close),
 						run(key("d"), "inspect", Builtin::Inspect),
 						run(key("s"), "cache", Builtin::Cache),

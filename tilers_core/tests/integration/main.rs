@@ -11,6 +11,7 @@
 
 mod actions;
 mod carry;
+mod collapse;
 mod fill;
 mod keys;
 mod mins;

@@ -76,7 +76,7 @@ test.describe('default platform', () => {
 
 	test('a tile’s ? opens the help naming it', async ({ page }) => {
 		const tile = page.locator('.tl-tile:not(.tl-shadow)').nth(1)
-		const title = await tile.locator('.tl-tab.tl-active').innerText()
+		const title = await tile.locator('.tl-tab.tl-active span').innerText() // insilico's label: the title, then its ×
 		await tile.locator('.tl-action[title="Keybinds"]').click()
 		await expect(page.locator('.tl-help')).toBeVisible()
 		await expect(page.locator('.tl-help-pane')).toHaveText(title)

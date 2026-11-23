@@ -563,7 +563,7 @@ fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool,
 }
 
 /// One whole pointer gesture, plus the three invariants that only exist around it: a press never
-/// touches the model, a cancel is a no-op, and an unarmed release is pure tab activation.
+/// touches the model, a cancel is a no-op, and an unarmed release is a click: it activates a tab, or opens a spine.
 fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	let titles = HashMap::new();
 	let before = world.state.grid().clone();
@@ -580,6 +580,7 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 	if world.state.grid() != &before {
 		return Err("a press mutated the layout".to_string());
 	}
+	let took = world.state.dragging(); // a press mid-resize is refused
 
 	world.resolved.clear();
 	let mut armed = false;
@@ -605,9 +606,21 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 		};
 	}
 
+	let pressed = match grab {
+		Grab::Tile { gid, .. } => *gid,
+		Grab::Tab { from, .. } => *from,
+	};
+	let spine = took && world.state.frames(&titles).iter().any(|f| f.gid == pressed && f.collapsed);
 	world.structural_edit();
 	world.state.drag_release();
-	if !armed {
+	if !armed && spine {
+		// Opening is `collapse`'s own edit, which the oracle checks as any other layout; the click's part is that it opened, and only reshaped.
+		let tabs = |g: &PackedGrid| g.cells.iter().map(|c| (c.group.id, c.group.tabs.clone())).collect::<HashMap<_, _>>();
+		let now = world.state.grid();
+		if now.cells.iter().any(|c| c.group.id == pressed && c.collapsed.is_some()) || tabs(now) != tabs(&before) {
+			return Err(format!("a click on spine {pressed:?} didn't just open it: {:?} vs {:?}", now.cells, before.cells));
+		}
+	} else if !armed {
 		// A press that never armed is a click: at most it activates the tab it landed on.
 		let mut expect = before.clone();
 		for (e, a) in expect.cells.iter_mut().zip(&world.state.grid().cells) {

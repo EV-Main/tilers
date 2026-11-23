@@ -8,7 +8,7 @@
 //! new `pub` on [`PackedState`].
 //!
 //! Not checkable from out here: a dangling `focused` id has no getter. It surfaces instead as a
-//! panic the moment the close chord fires (`close_active: group exists`), which `catch_unwind`
+//! panic the moment the close chord fires (`live() checked the group exists`), which `catch_unwind`
 //! reports — so the fuzzer still finds it, just as a crash rather than an oracle violation.
 
 use std::collections::{HashMap, HashSet};
@@ -46,6 +46,7 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 			};
 			(w.max(pw), h.max(ph))
 		});
+		let need_w = if c.collapsed.is_some() { title_h } else { need_w }; // a spine is the title bar on its side
 		let tight = |floor: u32, step: f64, need: f64| floor as f64 * step >= need - HAIRLINE && (floor <= 1 || ((floor - 1) as f64) * step < need + HAIRLINE);
 		if !tight(c.min_w, sw, need_w) || !tight(c.min_h, sh, need_h) {
 			return Err(format!(
@@ -60,6 +61,9 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 		}
 		if c.x + c.w > cols {
 			return Err(format!("cell spills past cols={cols}: {c:?}"));
+		}
+		if c.collapsed.is_some() && c.w != c.min_w.min(cols) {
+			return Err(format!("a spine is not its derived width {}: {c:?}", c.min_w));
 		}
 		if c.group.tabs.is_empty() {
 			return Err(format!("empty group {:?}", c.group.id));
@@ -130,6 +134,18 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 		};
 		if s != f {
 			return Err(format!("panel {} slot {s:?} drifted from its frame {f:?}", panel.0));
+		}
+	}
+
+	// A spine's width is derived, so nothing sets one; its content is hidden, its strip being all it shows.
+	for f in frames.iter().filter(|f| grid.cells.iter().any(|c| c.group.id == f.gid && c.collapsed.is_some())) {
+		if let Some((g, _)) = f.grips.iter().find(|(g, _)| !matches!(g, Grip::Bottom | Grip::Fold)) {
+			return Err(format!("spine {:?} renders a {g:?} grip", f.gid));
+		}
+	}
+	for f in frames.iter().filter(|f| f.collapsed) {
+		if let Some((p, _)) = state.content_slots().into_iter().find(|(_, s)| s.group == f.gid && rect(&s.style).is_some()) {
+			return Err(format!("spine {:?} shows panel {}", f.gid, p.0));
 		}
 	}
 

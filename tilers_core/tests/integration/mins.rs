@@ -12,7 +12,8 @@ fn tile_px_h(state: &PackedState) -> f64 {
 	let frames = state.frames(&HashMap::new());
 	let style = &frames.first().expect("one tile is placed").style;
 	let at = style.find("height:").expect("a placed tile has a px height") + "height:".len();
-	style[at..style[at..].find("px").expect("px unit") + at].parse().expect("a number")
+	let s = style[at..].trim_start_matches("calc("); // inset by the gap
+	s[..s.find("px").expect("px unit")].parse().expect("a number")
 }
 
 #[test]

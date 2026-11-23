@@ -30,6 +30,8 @@ use crate::{
 /// Root font size assumed before the first measure, and on a non-DOM target (the fuzzer). Every
 /// browser's default.
 const REM_PX: f64 = 16.0;
+/// The space between tiles: each tile and its panels' slots are inset by half of it, so the grid stays unit-free.
+const GAP: &str = "var(--tl-gap, 0px)";
 /// A press promotes to a drag only past this many px, so a click still activates a tab.
 const DRAG_THRESHOLD: f64 = 4.0;
 /// Px per frame a held drag scrolls at past a scroller's edge; its edge band ramps up to it.
@@ -193,9 +195,44 @@ impl PackedState {
 		self.refloor();
 	}
 
-	pub fn close_active(&mut self, group: GroupId) {
-		self.base().close_active(group);
+	/// Close `panel`'s tab, and its tile with its last one. A tab gone since the click was queued is ignored.
+	pub fn close(&mut self, panel: &PanelId) {
+		if !self.base().cells.iter().any(|c| c.group.tabs.contains(panel)) {
+			return;
+		}
+		self.base().close(panel);
 		self.refloor();
+	}
+
+	/// Toggle `group` filling the view. A view override, never layout.
+	pub fn maximize(&mut self, group: GroupId) {
+		self.maximized = if self.maximized == Some(group) { None } else { Some(group) };
+	}
+
+	/// Toggle `group` between its tile and a spine: the tile narrows to the spine, keeping the width it
+	/// opens back to, and opening grows it back, pushing what it reaches as a grip would.
+	pub fn collapse(&mut self, group: GroupId) {
+		assert!(self.step_px.0 > 0.0, "collapse before the first measure: no step size yet");
+		let (spine, cols) = (self.spine(), self.cols);
+		let base = self.base();
+		let idx = base.cells.iter().position(|c| c.group.id == group).expect("collapse: group exists");
+		let c = &mut base.cells[idx];
+		let right = match c.collapsed.take() {
+			Some(w) => c.x + w,
+			None => {
+				(c.collapsed, c.min_w) = (Some(c.w), spine);
+				c.x + spine
+			}
+		};
+		let (left, h) = (c.x, c.h);
+		*base = base.resized(idx, left, right, h, cols);
+		base.reassign_ranks();
+		self.refloor();
+	}
+
+	/// A spine's width in steps: the title bar's height, the header turned on its side.
+	fn spine(&self) -> u32 {
+		((self.title_h() / self.step_px.0).ceil() as u32).max(1)
 	}
 
 	/// The layout an edit lands on: while a resize is in flight the live grid is derived from its
@@ -263,7 +300,15 @@ impl PackedState {
 			return;
 		}
 		let base = self.resize.as_ref().map_or(&self.grid, |r| &r.press);
-		let floors: Vec<(u32, u32)> = base.cells.iter().map(|c| self.floor(&c.group.tabs)).collect();
+		let spine = self.spine();
+		let floors: Vec<(u32, u32)> = base
+			.cells
+			.iter()
+			.map(|c| {
+				let (w, h) = self.floor(&c.group.tabs);
+				(if c.collapsed.is_some() { spine } else { w }, h)
+			})
+			.collect();
 		let cols = self.cols;
 		let base = self.base();
 		for (c, (w, h)) in base.cells.iter_mut().zip(floors) {
@@ -278,6 +323,7 @@ impl PackedState {
 		let cols = self.cols;
 		let base = self.base();
 		let c = &base.cells[idx];
+		assert!(c.collapsed.is_none() || new_w == c.w, "resize sets a spine's width, which is derived: open it first");
 		*base = base.resized(idx, c.x, c.x + new_w, new_h, cols);
 		base.reassign_ranks();
 		self.follow();
@@ -473,9 +519,16 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(from);
-		let (w, h) = self.grid.cells.iter().find(|c| c.group.id == from).map(|c| (c.w, c.h)).expect("press_tab: group exists");
+		let c = self.grid.cells.iter().find(|c| c.group.id == from).expect("press_tab: group exists");
+		// A lone tab is its tile, so moving it keeps the tile (a spine stays one); a torn tab opens at the width a spine keeps.
+		let (source, w) = if c.group.tabs.len() > 1 {
+			(DragSource::Tab { panel, from }, c.collapsed.unwrap_or(c.w))
+		} else {
+			(DragSource::Tile(from), c.w)
+		};
+		let h = c.h;
 		self.drag = Some(Drag {
-			source: DragSource::Tab { panel, from },
+			source,
 			src_w: w,
 			src_h: h,
 			start,
@@ -611,7 +664,7 @@ impl PackedState {
 	}
 
 	/// Commit a drag: an armed release runs the same [`drop`](PackedGrid::drop) the preview used; an
-	/// unarmed tab release is a plain click that just activates that tab.
+	/// unarmed release is a plain click, which activates a tab and opens a spine.
 	pub fn drag_release(&mut self) {
 		let Some(d) = self.drag.take() else { return };
 		if d.armed {
@@ -622,11 +675,23 @@ impl PackedState {
 				self.grid = g;
 				self.refloor();
 			}
-		} else if !d.carried
-			&& let DragSource::Tab { panel, from } = &d.source
-		{
-			self.drag_enter_tab(*from, panel);
+		} else if !d.carried {
+			let group = match &d.source {
+				DragSource::Tab { panel, from } => {
+					self.drag_enter_tab(*from, panel);
+					*from
+				}
+				DragSource::Tile(g) => *g,
+			};
+			if self.spined(group) {
+				self.collapse(group);
+			}
 		}
+	}
+
+	/// Whether `group` shows as a spine: collapsed, and not maximized out of it.
+	fn spined(&self, group: GroupId) -> bool {
+		self.live(self.maximized) != Some(group) && self.grid.cells.iter().any(|c| c.group.id == group && c.collapsed.is_some())
 	}
 
 	/// A native drag (a host's card, a file) entered a tab: open it, so its content can take the drop.
@@ -868,17 +933,33 @@ impl PackedState {
 			Builtin::Redo => !gesture && self.restore(1),
 			Builtin::Close => match self.live(self.focused) {
 				Some(g) if !gesture => {
-					self.close_active(g);
+					let active = self
+						.grid
+						.cells
+						.iter()
+						.find(|c| c.group.id == g)
+						.expect("live() checked the group exists")
+						.group
+						.active_panel()
+						.clone();
+					self.close(&active);
 					true
 				}
 				_ => false,
 			},
 			Builtin::Maximize => match self.live(self.focused) {
 				Some(f) => {
-					self.maximized = if self.maximized == Some(f) { None } else { Some(f) };
+					self.maximize(f);
 					true
 				}
 				None => false,
+			},
+			Builtin::Collapse => match self.live(self.focused) {
+				Some(g) if !gesture => {
+					self.collapse(g);
+					true
+				}
+				_ => false,
 			},
 			Builtin::Inspect => match self.live(self.maximized).or(self.live(self.focused)) {
 				Some(g) => {
@@ -956,10 +1037,10 @@ impl PackedState {
 				continue;
 			}
 			let style = if maximized == Some(gid) {
-				"left:0; top:0; width:100%; height:100%;".to_string()
+				format!("left:calc({GAP} / 2); top:calc({GAP} / 2); width:calc(100% - {GAP}); height:calc(100% - {GAP});")
 			} else {
 				format!(
-					"left:{}px; top:{}px; width:{}px; height:{}px;",
+					"left:calc({}px + {GAP} / 2); top:calc({}px + {GAP} / 2); width:calc({}px - {GAP}); height:calc({}px - {GAP});",
 					cell.x as f64 * sw,
 					cell.y as f64 * sh,
 					cell.w as f64 * sw,
@@ -975,6 +1056,8 @@ impl PackedState {
 					style,
 					shadow: true,
 					tab_drop: false,
+					maximized: false,
+					collapsed: false,
 					tabs: Vec::new(),
 					grips: Vec::new(),
 				});
@@ -987,6 +1070,8 @@ impl PackedState {
 				style,
 				shadow: false,
 				tab_drop,
+				maximized: maximized == Some(gid),
+				collapsed: cell.collapsed.is_some() && maximized != Some(gid),
 				tabs,
 				grips: self.grips(&g, idx, maximized == Some(gid)),
 			});
@@ -1009,15 +1094,16 @@ impl PackedState {
 		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
 		// A host's grip is guessed at most twice ours: its root font may be larger.
 		let folded = self.framed && !maximized && top < view_bottom && bottom > view_bottom - 2.0 * grip;
+		let spine = c.collapsed.is_some(); // a spine's width is derived, so it has no grip that sets one, maximized or not
 		[
-			g.free_left(idx).then_some((Grip::Left, String::new())),
-			Some((if self.framed && !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
+			(!spine && g.free_left(idx)).then_some((Grip::Left, String::new())),
+			(!spine).then(|| (if self.framed && !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
 			Some(if folded {
 				(Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top))
 			} else {
 				(Grip::Bottom, String::new())
 			}),
-			Some((Grip::Corner, String::new())),
+			(!spine).then_some((Grip::Corner, String::new())),
 		]
 		.into_iter()
 		.flatten()
@@ -1056,7 +1142,8 @@ impl PackedState {
 		for cell in &g.cells {
 			let active = cell.group.active_panel().clone();
 			for id in &cell.group.tabs {
-				let style = if hidden.contains(id) {
+				let spine = cell.collapsed.is_some() && maximized != Some(cell.group.id);
+				let style = if hidden.contains(id) || spine {
 					"display:none;".to_string()
 				} else {
 					slot_style(maximized, cell.group.id, cell.x, cell.y, cell.w, cell.h, id == &active, sw, sh, self.title_h())
@@ -1089,17 +1176,24 @@ impl PackedState {
 	/// keeping the grabbed point under the cursor, while its shadow snaps to the landing cell.
 	pub fn ghost(&self, titles: &HashMap<PanelId, String>) -> Option<Ghost> {
 		let d = self.drag.as_ref().filter(|d| d.armed && !d.carried)?; // the browser draws a carry's drag image
-		let tabs = match &d.source {
-			DragSource::Tile(g) => Tab::strip(&self.grid.cells.iter().find(|c| c.group.id == *g).expect("drag source group exists").group, titles),
-			DragSource::Tab { panel, .. } => vec![Tab {
-				id: panel.clone(),
-				title: titles.get(panel).cloned().unwrap_or_default(),
-				active: true,
-			}],
+		let (tabs, collapsed) = match &d.source {
+			DragSource::Tile(g) => {
+				let c = self.grid.cells.iter().find(|c| c.group.id == *g).expect("drag source group exists");
+				(Tab::strip(&c.group, titles), c.collapsed.is_some())
+			}
+			DragSource::Tab { panel, .. } => (
+				vec![Tab {
+					id: panel.clone(),
+					title: titles.get(panel).cloned().unwrap_or_default(),
+					active: true,
+				}],
+				false,
+			),
 		};
 		let (sw, sh) = self.step();
 		Some(Ghost {
 			tabs,
+			collapsed,
 			left: d.cursor.0 - d.grab.0,
 			top: d.cursor.1 - d.grab.1,
 			w: d.src_w as f64 * sw,
@@ -1192,6 +1286,10 @@ pub struct Frame {
 	pub style: String,
 	pub shadow: bool,
 	pub tab_drop: bool,
+	/// Filling the view (see [`PackedState::maximize`]).
+	pub maximized: bool,
+	/// Showing as a spine (see [`PackedState::collapse`]); a maximized tile shows open.
+	pub collapsed: bool,
 	pub tabs: Vec<Tab>,
 	/// The grips to render, in paint order (none on a shadow), each with its inline style.
 	pub grips: Vec<(Grip, String)>,
@@ -1225,6 +1323,8 @@ pub struct ContentSlot {
 /// The floating drag ghost: the header it carries, top-left in client px, and its size in px.
 pub struct Ghost {
 	pub tabs: Vec<Tab>,
+	/// A spine being moved: drawn as one.
+	pub collapsed: bool,
 	pub left: f64,
 	pub top: f64,
 	pub w: f64,
@@ -1293,7 +1393,7 @@ fn slot_style(maximized: Option<GroupId>, group: GroupId, x: u32, y: u32, w: u32
 		if group != mg || !active {
 			return "display:none;".into();
 		}
-		return format!("display:block; left:0; top:{chrome_h}px; width:100%; height:calc(100% - {chrome_h}px);");
+		return format!("display:block; left:calc({GAP} / 2); top:calc({chrome_h}px + {GAP} / 2); width:calc(100% - {GAP}); height:calc(100% - {chrome_h}px - {GAP});");
 	}
 	if !active {
 		return "display:none;".into();
@@ -1302,7 +1402,7 @@ fn slot_style(maximized: Option<GroupId>, group: GroupId, x: u32, y: u32, w: u32
 	// top/height bridge the two with `calc`.
 	let (left, top) = (x as f64 * step_w, y as f64 * step_h);
 	let (width, height) = (w as f64 * step_w, h as f64 * step_h);
-	format!("display:block; left:{left}px; top:calc({top}px + {chrome_h}px); width:{width}px; height:calc({height}px - {chrome_h}px);")
+	format!("display:block; left:calc({left}px + {GAP} / 2); top:calc({top}px + {chrome_h}px + {GAP} / 2); width:calc({width}px - {GAP}); height:calc({height}px - {chrome_h}px - {GAP});")
 }
 
 /// The document's root font size in px. Only ever reached from a live measure of a mounted element,

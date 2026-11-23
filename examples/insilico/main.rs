@@ -7,7 +7,8 @@
 //! price walks, prints a trade tape, fills your resting limit orders, and books PnL — so a fill
 //! placed in the order ticket ripples through Positions, Balances, Orders, Trades and Console at
 //! once. Tiles pack left-to-right; the top-bar `+` spawns a random window, each tile's `+` opens
-//! the catalog as a new tab, `x` closes the active tab, and the grip resizes in `STEP` increments.
+//! the catalog as a new tab, a tab's `×` closes it, the header's own buttons maximize, collapse and
+//! close the tile's active tab, and the grip resizes in `STEP` increments.
 #![expect(clippy::useless_format, reason = "rsx! expands an attribute's `\"{x}\"` through `format!`")]
 
 mod balances;
@@ -27,7 +28,7 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use market::{Market, xorshift};
-use tilers_dioxus::{Config, DockPanel, Group, GroupId, MinSize, PackedApi, PackedArea, PanelId, Step};
+use tilers_dioxus::{Config, DockPanel, Group, GroupId, MinSize, PackedApi, PackedArea, PanelId, Step, Tile};
 
 /// The catalog of insilico-style windows. Each declares its title, default size, and a per-type
 /// [`MinSize`] (in whichever unit reads naturally).
@@ -125,11 +126,49 @@ fn kind_from_id(id: &str) -> Option<Kind> {
 /// A panel's content for `kind` under a given id.
 fn panel_of(kind: Kind, id: PanelId) -> DockPanel {
 	DockPanel {
-		id,
 		title: kind.title().into(),
 		content: rsx! { KindView { kind } },
 		min: kind.min(),
+		label: Some(rsx! { TabLabel { id: id.clone(), title: kind.title() } }),
+		id,
 	}
+}
+
+/// A tab's label: its title and a `×` closing it.
+#[component]
+fn TabLabel(id: PanelId, title: &'static str) -> Element {
+	let api = use_context::<Signal<Option<PackedApi>>>();
+	rsx! {
+		span { "{title}" }
+		button {
+			class: "tl-action",
+			title: "Close",
+			onclick: move |_| api().expect("a tab shows once the dock entered a band").close(&id),
+			"×"
+		}
+	}
+}
+
+/// The header's buttons, right of the tabs.
+fn tile_actions(pending: Signal<Option<GroupId>>) -> Callback<Tile, Element> {
+	Callback::new(
+		move |Tile {
+		          group,
+		          active,
+		          maximized,
+		          collapsed,
+		          mut api,
+		      }: Tile| {
+			let mut pending = pending;
+			rsx! {
+				button { class: "tl-action", title: "Keybinds", onclick: move |_| api.help(group), "?" }
+				button { class: "tl-action", title: "Add window as a tab", onclick: move |_| pending.set(Some(group)), "+" }
+				button { class: "tl-action", title: if maximized { "Restore" } else { "Maximize" }, onclick: move |_| api.maximize(group), if maximized { "⤡" } else { "⤢" } }
+				button { class: "tl-action", title: if collapsed { "Expand" } else { "Collapse" }, onclick: move |_| api.collapse(group), if collapsed { "▸" } else { "◂" } }
+				button { class: "tl-action", title: "Close", onclick: move |_| api.close(&active), "✕" }
+			}
+		},
+	)
 }
 
 /// A unique panel id + its content for `kind`, minted from the running counter.
@@ -197,10 +236,8 @@ fn app() -> Element {
 	let panels = use_signal(Vec::<DockPanel>::new);
 	let counter = use_signal(|| 0u64);
 	let mut market = use_context_provider(|| Signal::new(Market::new()));
-	let mut api = use_signal(|| None::<PackedApi>);
-	let mut pending = use_signal(|| None::<GroupId>);
-
-	use_context_provider(|| Callback::new(move |gid: GroupId| pending.set(Some(gid))));
+	let mut api = use_context_provider(|| Signal::new(None::<PackedApi>));
+	let pending = use_signal(|| None::<GroupId>);
 
 	use_future(move || async move {
 		loop {
@@ -246,7 +283,12 @@ fn app() -> Element {
 				}
 			}
 			div { style: "flex:1 1 auto; position:relative;",
-				PackedArea { panels, on_band: Some(on_band), config: Some(insilico_config(api)) }
+				PackedArea {
+					panels,
+					on_band: Some(on_band),
+					config: Some(insilico_config(api)),
+					actions: Some(tile_actions(pending)),
+				}
 			}
 			if let Some(gid) = pending() {
 				CatalogPopup { gid, panels, counter, api, pending }

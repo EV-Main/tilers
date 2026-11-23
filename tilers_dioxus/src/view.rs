@@ -47,8 +47,25 @@ impl PackedApi {
 		s.carry(panel, w, h);
 	}
 
-	pub fn close_active(&mut self, group: GroupId) {
-		self.state.write().close_active(group);
+	/// Close `panel`'s tab, and its tile with its last one.
+	pub fn close(&mut self, panel: &PanelId) {
+		self.state.write().close(panel);
+	}
+
+	/// Toggle `group` filling the dock.
+	pub fn maximize(&mut self, group: GroupId) {
+		self.state.write().maximize(group);
+	}
+
+	/// Toggle `group` between its tile and a spine as wide as the title bar is tall, which keeps the
+	/// width it opens back to. A click on a spine opens it too.
+	pub fn collapse(&mut self, group: GroupId) {
+		self.state.write().collapse(group);
+	}
+
+	/// The keybinds, aimed at `group`.
+	pub fn help(&mut self, group: GroupId) {
+		self.state.write().open_help(group);
 	}
 
 	pub fn resize(&mut self, idx: usize, new_w: u32, new_h: u32) {
@@ -119,17 +136,17 @@ impl PackedApi {
 ///   again on every band crossing — *after* the framework has resolved that band's seed cache.
 ///   [`PackedApi::restored`] says whether it found one; if not, the grid is empty and the host is
 ///   expected to place its tiles (or load its own default) against the now-real step size.
-/// - the host must provide a `Callback<GroupId>` context — the per-tile `+` button calls it to ask
-///   the host to open a new tab.
+/// - `actions`: what a tile's header holds right of its tabs, per tile; `None` leaves it bare. A press
+///   anywhere in it is never the tile's. It runs inside this component's render, so hooks belong in a
+///   component it returns.
 #[component]
-pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<PackedApi>>, config: Option<Config>) -> Element {
+pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<PackedApi>>, config: Option<Config>, actions: Option<Callback<Tile, Element>>) -> Element {
 	let cfg = config.unwrap_or_default();
 	let title_h_rem = cfg.title_h_rem;
 	// Root-scope, not this scope: `PackedApi` is driven from outside `PackedArea`'s subtree, so the
 	// cell must outlive this component (this root component never unmounts).
 	let mut state = use_hook(move || Signal::new_in_scope(PackedState::new(cfg), ScopeId::ROOT));
 	let api = PackedApi { state, panels };
-	let request_tab = use_context::<Callback<GroupId>>();
 
 	#[cfg(target_arch = "wasm32")]
 	let mut root = use_signal(|| None::<web_sys::Element>);
@@ -266,6 +283,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 	});
 
 	let titles: HashMap<PanelId, String> = panels.read().iter().map(|p| (p.id.clone(), p.title.clone())).collect();
+	let labels: HashMap<PanelId, Element> = panels.read().iter().filter_map(|p| Some((p.id.clone(), p.label.clone()?))).collect();
 	let frames = state.read().frames(&titles);
 	let content = state.read().content_slots();
 	let ghost = state.read().ghost(&titles);
@@ -341,7 +359,12 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 			for frame in frames.iter() {
 				div {
 					key: "{frame.gid.0}",
-					class: if frame.shadow { "tl-tile tl-shadow" } else { "tl-tile" },
+					class: match (frame.shadow, frame.collapsed) {
+						(true, _) => "tl-tile tl-shadow",
+						(false, true) => "tl-tile tl-collapsed",
+						(false, false) => "tl-tile",
+					},
+					"data-panel": frame.tabs.iter().find(|t| t.active).map(|t| t.id.0.clone()),
 					style: "{frame.style}",
 					if !frame.shadow {
 						div { class: "tl-group",
@@ -372,6 +395,9 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 													return;
 												}
 												e.stop_propagation();
+												if on_control(&e) {
+													return;
+												}
 												let c = e.client_coordinates();
 												let g = e.element_coordinates();
 												state.write().press_tab(id.clone(), from, (c.x, c.y), (g.x, g.y));
@@ -381,41 +407,24 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 											let (id, from) = (tab.id.clone(), frame.gid);
 											move |_| state.write().drag_enter_tab(from, &id)
 										},
-										"{tab.title}"
+										match labels.get(&tab.id) {
+											Some(label) => label.clone(),
+											None => rsx! { "{tab.title}" },
+										}
 									}
 								}
-								div { class: "tl-actions",
-									button {
-										class: "tl-action",
-										title: "Keybinds",
-										onpointerdown: |e: PointerEvent| e.stop_propagation(),
-										onclick: {
-											let gid = frame.gid;
-											move |_| state.write().open_help(gid)
-										},
-										"?"
-									}
-									button {
-										class: "tl-action",
-										title: "Add window as a tab",
-										onpointerdown: |e: PointerEvent| e.stop_propagation(),
-										onclick: {
-											let gid = frame.gid;
-											move |_| request_tab.call(gid)
-										},
-										"+"
-									}
-									button {
-										class: "tl-action",
-										title: "Close",
-										onpointerdown: |e: PointerEvent| e.stop_propagation(),
-										onclick: {
-											let gid = frame.gid;
-											move |_| {
-												state.write().close_active(gid);
-											}
-										},
-										"✕"
+								if let Some(actions) = actions {
+									div { class: "tl-actions", onpointerdown: |e: PointerEvent| e.stop_propagation(),
+										{
+											actions
+												.call(Tile {
+													group: frame.gid,
+													active: frame.tabs.iter().find(|t| t.active).expect("a tile shows one active tab").id.clone(),
+													maximized: frame.maximized,
+													collapsed: frame.collapsed,
+													api,
+												})
+										}
 									}
 								}
 							}
@@ -496,7 +505,9 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 				div { style: "position:fixed; inset:0; z-index:1000; cursor:{grip.cursor()};" }
 			}
 			if let Some(g) = ghost {
-				div { class: "tl-ghost", style: "left:{g.left}px; top:{g.top}px; width:{g.w}px; height:{g.h}px;",
+				div {
+					class: if g.collapsed { "tl-ghost tl-collapsed" } else { "tl-ghost" },
+					style: "left:{g.left}px; top:{g.top}px; width:{g.w}px; height:{g.h}px;",
 					div { class: "tl-header",
 						for t in g.tabs.iter() {
 							div { key: "{t.id.0}", class: if t.active { "tl-tab tl-active" } else { "tl-tab" }, "{t.title}" }
@@ -542,6 +553,41 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 		}
 	}
 }
+/// What [`PackedArea`]'s `actions` renders for: one tile, and the handle to act on it.
+#[derive(Clone)]
+pub struct Tile {
+	pub group: GroupId,
+	/// The panel its strip shows.
+	pub active: PanelId,
+	pub maximized: bool,
+	/// Showing as a spine.
+	pub collapsed: bool,
+	pub api: PackedApi,
+}
+
+/// A press on a host's control in a tab's label is the control's: it never starts a tab drag, whose
+/// capture surface would take the click.
+fn on_control(e: &PointerEvent) -> bool {
+	#[cfg(target_arch = "wasm32")]
+	{
+		use dioxus::web::WebEventExt;
+		use wasm_bindgen::JsCast;
+		e.data()
+			.as_web_event()
+			.target()
+			.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+			.expect("a pointerdown targets an element")
+			.closest(".tl-tab :is(button, a[href], input, select, textarea)")
+			.expect("a constant, valid selector")
+			.is_some()
+	}
+	#[cfg(not(target_arch = "wasm32"))]
+	{
+		let _ = e;
+		false
+	}
+}
+
 fn mins_of(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
 	panels.iter().map(|p| (p.id.clone(), p.min)).collect()
 }

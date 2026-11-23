@@ -55,11 +55,15 @@ flowchart LR
   `Breakpoint` (5 widths, sets the column count) and `Band` (3 widths, the persistence
   key).
 - `persist` — `localStorage` read/write, wasm-only (a native no-op), crate-internal.
-- `css` — the one structural stylesheet; colors and sizes are `--tl-*` custom properties.
+- `css` — the one structural stylesheet, every selector in `:where()` so a host's rule always wins;
+  colors and sizes are `--tl-*` custom properties.
 
 Bindings (`tilers_dioxus`, `tilers_leptos`) hold `PackedState` in one reactive
 cell, forward DOM events into it, render the view-model, and expose `PackedApi` — a cheap
 handle over that cell — to the host through `on_band`.
+A tile's chrome is split the same way: the binding renders the strip and owns its gestures (the empty
+area moves the tile, a tab drags out or joins), while what fills it is the host's — a panel's tab
+label, and per dock the header's actions. A press on a control inside a label is the control's.
 Tile drags are the reducer's own pointer gestures; a native drag (a host's card, a file) only opens
 a tab it enters (`drag_enter_tab`), and the drop stays the content's — unless the host declared it a
 carry (`carry`): then its `dragover`s drive the same `drag_move` → `resolve_target` → preview `drop`
@@ -124,6 +128,9 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   `Config::row_h_rem`, at which a deeper one scrolls. The container's height decides how long a row
   renders, never where a tile is in the grid or how many rows it spans. A gesture holds the row it
   started on, so the grid under the pointer stays still.
+- A collapsed tile is a spine as wide as the title bar is tall, at the live step: derived like a
+  floor, never stored. What is layout is that it is collapsed and the width it opens back to
+  (`Cell::collapsed`). Nothing but opening sets a spine's width, so it has no width grips.
 - A min belongs to the panel (`DockPanel::min`), not the tile. A cell's floor is derived from its
   tabs' declared mins at the live column step and the least row, on every measure and tab change;
   never stored as layout.

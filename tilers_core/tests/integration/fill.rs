@@ -12,7 +12,8 @@ const HEIGHT: f64 = 900.0;
 fn tiles(state: &PackedState) -> Vec<(f64, f64)> {
 	let px = |style: &str, key: &str| -> f64 {
 		let at = style.find(key).unwrap_or_else(|| panic!("a placed tile has a px {key}")) + key.len();
-		style[at..style[at..].find("px").expect("px unit") + at].parse().expect("a number")
+		let s = style[at..].trim_start_matches("calc("); // inset by the gap
+		s[..s.find("px").expect("px unit")].parse().expect("a number")
 	};
 	state.frames(&HashMap::new()).iter().map(|f| (px(&f.style, "top:"), px(&f.style, "height:"))).collect()
 }
