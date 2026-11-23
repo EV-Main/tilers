@@ -11,7 +11,7 @@
 
 🌐 **[Live demo](https://EV-Main.github.io/tilers/)** — no setup, runs in the browser.
 
-A tiling/docking layout for [Dioxus](https://dioxuslabs.com/) and [Leptos](https://leptos.dev/) — the IDE/trading-terminal kind: panes split, resize, tab together, collapse, and maximize, with the arrangement cached per screen size and restored on reload.
+A tiling/docking layout for [Dioxus](https://dioxuslabs.com/) and [Leptos](https://leptos.dev/) — the IDE/trading-terminal kind: panes split, resize, tab together, float, and maximize, with the arrangement cached per screen size and restored on reload.
 
 ![fuzz trace, seed 172](docs/.readme_assets/assets/fuzz.svg)
 
@@ -27,6 +27,8 @@ use tilers_dioxus::{Config, DockPanel, Group, MinSize, PackedApi, PackedArea, Pa
 
 fn app() -> Element {
     let panels = use_signal(Vec::<DockPanel>::new);
+    // The per-tile `+` button asks the host to open a tab; it must find this in context.
+    use_context_provider(|| Callback::new(|_gid| {}));
 
     let on_band = Callback::new(move |mut api: PackedApi| {
         // The cache already had this band's layout; re-attach content by walking `api.tab_ids()`.
@@ -36,7 +38,7 @@ fn app() -> Element {
         for (id, title) in [("chart", "Chart"), ("orders", "Orders")] {
             let id = PanelId(id.into());
             let min = MinSize::Px { w: 240.0, h: 120.0 }; // the content box, below the title bar
-            panels.write().push(DockPanel { id: id.clone(), title: title.into(), content: rsx! { "…" }, min, .. });
+            panels.write().push(DockPanel { id: id.clone(), title: title.into(), content: rsx! { "…" }, min });
             let gid = api.mint_group_id();
             api.place(Group::new(gid, id), 22, 16);
         }
@@ -54,22 +56,7 @@ fn app() -> Element {
 
 Runnable demo: `dx serve --example insilico --package tilers_dioxus --platform web` — or open the [hosted demo](https://EV-Main.github.io/tilers/), no local setup needed. The Leptos binding is the same component with `Arc<dyn Fn(PackedApi) + Send + Sync>` in place of `Callback` — see `examples/insilico_leptos`.
 
-**Props:** `panels` (order = stable overlay render order — don't reorder it, that remounts panels), `on_band` (see below), `config`, `actions` (below).
-
-**Tile chrome is yours.** A tile's header is the framework's strip — its empty area moves the tile, a tab drags out or joins another — holding what you render:
-- `DockPanel::label`: what the panel's tab shows (an icon, a count, a `×`); `None` shows `title`, which the drag ghost and the help always use. A press on a control in a label (`button`, `a`, `input`, `select`, `textarea`) is the control's, never a drag.
-- `actions: Callback<Tile, Element>`: what each tile's header holds right of its tabs; `Tile` carries its `group`, `active` panel, `maximized`/`collapsed` and the `api` to act on it. A press anywhere in it is never the tile's. Without it the header has no buttons; the keymap still reaches everything.
-- `.tl-tile[data-panel]` names the active panel, so a per-panel tint is a CSS rule.
-
-```rust
-let actions = Callback::new(|Tile { group, active, mut api, .. }: Tile| rsx! {
-    button { class: "tl-action", onclick: move |_| api.maximize(group), "⤢" }
-    button { class: "tl-action", onclick: move |_| api.collapse(group), "◂" }
-    button { class: "tl-action", onclick: move |_| api.close(&active), "✕" }
-});
-```
-
-**Collapsing** a tile turns it into a spine as wide as the title bar is tall, its strip on its side; it keeps its height and the width it opens back to (saved with the layout), and a click on it, or `collapse` again, opens it, pushing what it reaches as a grip would. The columns it frees stay free. A spine is a drop target along its whole length: a tile or tab dropped on it joins it, and its tabs fill it, so a native drop (a host's card) lands on your label.
+**Props:** `panels` (order = stable overlay render order — don't reorder it, that remounts panels), `on_band` (see below), `config`.
 
 **Mins** belong to the panel: `MinSize::Px`/`Rem` size its content box, `Steps` the whole tile. Every tile is floored to the max over its tabs, re-resolved on every measure, so a px need holds however short the window gets; a want the floor overrode comes back once the floor drops. Edit a panel's `min` in `panels` to re-floor it.
 
@@ -90,9 +77,7 @@ A cached payload that is corrupt, from a future schema, or empty counts as a mis
 let gid = api.mint_group_id();
 api.place(Group::new(gid, id), w, h);    // auto-packs left-to-right, top-to-bottom
 api.add_tab(gid, panel_id);
-api.close(&panel_id);                      // its tile goes with its last tab
-api.maximize(gid); api.collapse(gid);      // toggles
-api.help(gid);                             // the keybinds, aimed at that tile
+api.close_active(gid);
 api.resize(idx, new_w, new_h);             // the right grip and the bottom one, at once
 api.reset();                               // wipe the layout back to empty
 let json = api.save(); api.load(&json)?;   // `load` errors on corrupt/future JSON
@@ -104,13 +89,11 @@ api.cols(); api.band(); api.tab_ids();
 
 **Nested docks** — a dock inside another's tile works as is: the keyboard goes to the dock last pressed in (the innermost), and before any press to the outer one.
 
-**Keybinds** (`Config::keymap`). The framework claims only `Keymap::root` and one leader, `Alt+z` (`Ctrl+t` on macOS); everything else waits behind the leader, where a which-key popup lists the next keys after `--tl-hint-delay` (150ms). Root holds the leader and `Ctrl+z`/`Ctrl+y`/`Ctrl+Shift+z` (`Cmd` on macOS) for undo/redo; aimed at a text field they stay the browser's text undo. Behind the leader: `u`/`U` undo/redo, `Backspace` closes the focused pane, `f` maximizes it, `c` collapses it, `d` inspects it, `?` lists the whole keymap (as does `api.help`), and `s`/`S` cache/cache-and-publish the layout (unbound without `storage_key`/`on_publish`). Rebinding the leader is changing `on` of the root binding holding `Node::Scope`; dropping it for flat binds is moving that scope's children into `root`, starting from `Config::default().keymap`. Your own commands are `Node::Run { id, command: Command::Custom { label, run } }` at any depth, `id` unique and stable, `Node::Scope` nests.
+**Keybinds** (`Config::keymap`). The framework claims only `Keymap::root` and one leader, `Alt+z` (`Ctrl+t` on macOS); everything else waits behind the leader, where a which-key popup lists the next keys after `--tl-hint-delay` (150ms). Root holds the leader and `Ctrl+z`/`Ctrl+y`/`Ctrl+Shift+z` (`Cmd` on macOS) for undo/redo; aimed at a text field they stay the browser's text undo. Behind the leader: `u`/`U` undo/redo, `Backspace` closes the focused pane, `f` maximizes it, `d` inspects it, `?` lists the whole keymap (as does each tile's `?` button), and `s`/`S` cache/cache-and-publish the layout (unbound without `storage_key`/`on_publish`). Rebinding the leader is changing `on` of the root binding holding `Node::Scope`; dropping it for flat binds is moving that scope's children into `root`, starting from `Config::default().keymap`. Your own commands are `Node::Run { id, command: Command::Custom { label, run } }` at any depth, `id` unique and stable, `Node::Scope` nests.
 
-**Grid** — `Config::steps` (default 64) is the desktop column count, scaled down per band so the *physical* step stays ~constant and tiles stack instead of shrinking; within a band the count is fixed, so a layout spans its view at any width the band covers. `Config::row_h_rem` (default `2rem`) is the least row, stretched so a layout shorter than the view ends at its bottom.
+**Grid** — `Config::steps` (default 64) is the desktop column count, scaled down per band so the *physical* step stays ~constant and tiles reflow instead of shrinking; `Config::row_h_rem` (default `2rem`) is the least row, stretched so a layout shorter than the view ends at its bottom.
 
-**Sideways scrolling** — `Config::scroll_x: true` lets the grid run past the view's width, as it runs past its bottom: steps are square (`row_h_rem` wide), tiles placed at their least width (`place(group, 1, h)`, floored by their mins) line up in one row, the view scrolls sideways when the row is wider and the row stretches to its right edge when narrower. A board's columns: `MinSize::Px { w: 248.0, .. }` at the default `2rem` step and an `8px` `--tl-gap` renders each exactly 248px. `api.cols()` is then the grid's bound, not a width to share out.
-
-**Theming** — only structural CSS ships, every selector in `:where()`, so any rule of yours on a `.tl-*` class wins. Set `--tl-*` custom properties on any ancestor for colors/sizes (`--tl-accent`, `--tl-fg`, `--tl-group-bg`, `--tl-tab-bg`, `--tl-tab-active-bg`, `--tl-tab-active-fg`, `--tl-tab-border`, `--tl-tabstrip-bg`, `--tl-resize-bg`, `--tl-shadow-bg`, `--tl-content-pad`, `--tl-hint-delay`), and the geometry: `--tl-gap` between tiles (each tile and its content inset by half), `--tl-radius` of a tile's corners, `--tl-grip-w` the header's left grip rim and `--tl-grip` its paint (`none` hides it). The header's height is `Config::title_h_rem`, since the layout resolves it to px.
+**Theming** — only structural CSS ships; set `--tl-*` custom properties on any ancestor for colors/sizes (`--tl-accent`, `--tl-fg`, `--tl-group-bg`, `--tl-tab-bg`, `--tl-tab-active-bg`, `--tl-tab-active-fg`, `--tl-tab-border`, `--tl-tabstrip-bg`, `--tl-resize-bg`, `--tl-shadow-bg`, `--tl-content-pad`, `--tl-hint-delay`).
 
 
 
