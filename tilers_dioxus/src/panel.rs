@@ -12,9 +12,9 @@ use tilers_core::{MinSize, PanelId};
 /// VNode is placed by the binding's overlay loop.
 ///
 /// `label` is what its tab shows, `title` when `None`; the drag ghost and the help name it by `title`.
-/// A press on a control in it (a button, a link, a field) is the control's, never the tab's, so a
-/// label's own × may `PackedApi::close` it. A spine's tabs fill it, so a label is where a host's
-/// drop along a collapsed tile lands.
+/// A press on a control in it (a button, a link, a field) is the control's, never the tab's. The tab's
+/// close is the framework's, after the label. A spine's tabs fill it, so a label is where a host's drop
+/// along a collapsed tile lands.
 ///
 /// `content` is an eagerly-built `VNode`; that is fine because the overlay diffs by key, not by
 /// tree position. If lazy construction is ever needed, swap to `Callback<PanelId, Element>` — the
@@ -27,4 +27,7 @@ pub struct DockPanel {
 	/// What the content needs to stay legible; every tile hosting it is floored to fit.
 	pub min: MinSize,
 	pub label: Option<Element> = None,
+	/// The user can't close it or move it elsewhere: its tab has no `×`, its tile no close, float or
+	/// dock, and neither drags. Resizing, collapsing, maximizing and others joining its tile stay open.
+	pub locked: bool = false,
 }

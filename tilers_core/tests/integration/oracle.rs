@@ -39,7 +39,7 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 	for c in &grid.cells {
 		// The px each tab needs of the whole tile; the floor is the fewest steps holding all of them.
 		let (need_w, need_h) = c.group.tabs.iter().fold((0.0_f64, 0.0_f64), |(w, h), p| {
-			let (pw, ph) = match world.mins[p] {
+			let (pw, ph) = match world.panels[p].min {
 				MinSize::Steps { w, h } => (w.0 as f64 * sw, h.0 as f64 * sh),
 				MinSize::Rem { w, h } => (w * rem_px, h * rem_px + title_h),
 				MinSize::Px { w, h } => (w, h + title_h),
@@ -81,17 +81,34 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 		}
 	}
 
+	for f in &grid.floats {
+		if f.group.tabs.is_empty() || f.group.active >= f.group.tabs.len() {
+			return Err(format!("float {:?} holds no tab, or a dead active one", f.group));
+		}
+		if !groups.insert(f.group.id.0) {
+			return Err(format!("duplicate group id {} on a float", f.group.id.0));
+		}
+		for p in &f.group.tabs {
+			if !panels.insert(p.0.clone()) {
+				return Err(format!("duplicate panel id {} on a float", p.0));
+			}
+		}
+	}
+
 	// Floors are derived, so they're the one thing a round-trip may drop.
 	let mut back = serial::load(&serial::save(grid)).map_err(|e| format!("round-trip load failed: {e:?}"))?;
 	for (b, c) in back.cells.iter_mut().zip(&grid.cells) {
 		(b.min_w, b.min_h) = (c.min_w, c.min_h);
+	}
+	for (b, f) in back.floats.iter_mut().zip(&grid.floats) {
+		(b.min_w, b.min_h) = (f.min_w, f.min_h);
 	}
 	if &back != grid {
 		return Err("round-trip changed the grid".to_string());
 	}
 	// `maximized` is a pure view override that renders only its own tile, so naming a group the
 	// layout no longer holds renders nothing at all — which is how a dangling id shows up out here.
-	if !grid.cells.is_empty() && state.frames(&HashMap::new()).is_empty() {
+	if !(grid.cells.is_empty() && grid.floats.is_empty()) && state.frames(&HashMap::new()).is_empty() {
 		return Err("a non-empty grid rendered no frames (maximized names a dead group?)".to_string());
 	}
 	check_in_flight(world)
@@ -112,7 +129,13 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	let titles = HashMap::new();
 	let frames = state.frames(&titles);
 
-	let rects: Vec<(usize, [f64; 4])> = frames.iter().enumerate().filter_map(|(i, f)| rect(&f.style).map(|r| (i, r))).collect();
+	// A float is above the grid, not a cell: it overlaps tiles by design.
+	let rects: Vec<(usize, [f64; 4])> = frames
+		.iter()
+		.enumerate()
+		.filter(|(_, f)| !f.floating)
+		.filter_map(|(i, f)| rect(&f.style).map(|r| (i, r)))
+		.collect();
 	// Abutting edges are the common case and `x·step + w·step != (x+w)·step` in binary floating point,
 	// so a hairline counts as touching. A real overlap is a whole step wide, orders of magnitude above.
 	for (n, &(i, a)) in rects.iter().enumerate() {
@@ -155,9 +178,14 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	// band would lie under the host's, and neither would be sure to get the pointer. The rects mirror
 	// the stylesheet's grip geometry. Unframed, nothing lies past the view's edges to keep clear of.
 	let (t, title) = (state.title_h() / 8.0, state.title_h());
-	let (view_right, view_bottom) = (world.scroll.0 + world.size.0, world.scroll.1 + world.size.1);
 	for f in &frames {
 		let Some([l, top, w, h]) = rect(&f.style) else { continue };
+		// A float's rect is in the view, a tile's in the scrolled content.
+		let (view_right, view_bottom) = if f.floating {
+			world.size
+		} else {
+			(world.scroll.0 + world.size.0, world.scroll.1 + world.size.1)
+		};
 		for (grip, style) in &f.grips {
 			let at = |var: &str| {
 				style
@@ -186,12 +214,21 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 		}
 	}
 
+	// A float shows inside the view, unless its floor is larger than the view, when it sits at its origin.
+	for f in frames.iter().filter(|f| f.floating && !f.maximized) {
+		let [l, t, w, h] = rect(&f.style).ok_or_else(|| format!("float {:?} has no px rect: {}", f.gid, f.style))?;
+		let inside = |at: f64, len: f64, view: f64| at >= -HAIRLINE && (at + len <= view + HAIRLINE || at.abs() < HAIRLINE);
+		if !inside(l, w, world.size.0) || !inside(t, h, world.size.1) {
+			return Err(format!("float {:?} at {:?} leaves the {:?} view", f.gid, [l, t, w, h], world.size));
+		}
+	}
+
 	// The ghost exists exactly while the drag is armed, so it is the public witness of arming; an
 	// armed drag paints exactly one landing hint — a grey shadow, or a header highlight for a join.
 	// A maximized pane is the exception: it renders alone (`%`-sized, or not at all once the drag's
 	// preview tears its last tab away), so a hint belonging to any other tile has nowhere to land and
 	// only the upper bound survives.
-	let maximized = frames.is_empty() || frames.iter().any(|f| f.style.contains('%'));
+	let maximized = frames.is_empty() || frames.iter().any(|f| f.maximized);
 	let shadows = frames.iter().filter(|f| f.shadow).count();
 	let tab_drops = frames.iter().filter(|f| f.tab_drop).count();
 	let hints = shadows + tab_drops;
@@ -208,7 +245,7 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 /// `left`/`top`/`width`/`height` in px out of an inline style, or `None` for a hidden or
 /// percentage-sized (maximized) one — those carry no comparable rect. `calc(120px + 32px)` yields
 /// its leading term, which is the grid-derived part both getters compute.
-fn rect(style: &str) -> Option<[f64; 4]> {
+pub fn rect(style: &str) -> Option<[f64; 4]> {
 	if style.contains("display:none") || style.contains('%') {
 		return None;
 	}

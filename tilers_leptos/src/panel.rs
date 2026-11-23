@@ -21,4 +21,7 @@ pub struct DockPanel {
 	pub title: String,
 	pub content: PanelView,
 	pub min: MinSize,
+	/// The user can't close it or move it elsewhere: its tab has no `×`, its tile no close, float or
+	/// dock, and neither drags. Resizing, collapsing, maximizing and others joining its tile stay open.
+	pub locked: bool = false,
 }

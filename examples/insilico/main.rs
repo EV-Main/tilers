@@ -6,9 +6,10 @@
 //! Every pane is a different projection of one shared [`market::Market`] sim the ticker advances:
 //! price walks, prints a trade tape, fills your resting limit orders, and books PnL — so a fill
 //! placed in the order ticket ripples through Positions, Balances, Orders, Trades and Console at
-//! once. Tiles pack left-to-right; the top-bar `+` spawns a random window, each tile's `+` opens
-//! the catalog as a new tab, a tab's `×` closes it, the header's own buttons maximize, collapse and
-//! close the tile's active tab, and the grip resizes in `STEP` increments.
+//! once. Tiles pack left-to-right; the top-bar `+` spawns a random window and `⧉` opens one floating,
+//! each tile's `+` opens the catalog as a new tab, the host's own header buttons maximize and collapse
+//! beside the framework's, the console is locked, and the grip resizes in `STEP` increments.
+#![feature(default_field_values)]
 #![expect(clippy::useless_format, reason = "rsx! expands an attribute's `\"{x}\"` through `format!`")]
 
 mod balances;
@@ -123,49 +124,34 @@ fn kind_from_id(id: &str) -> Option<Kind> {
 	Kind::ALL.into_iter().find(|k| k.id() == prefix)
 }
 
-/// A panel's content for `kind` under a given id.
+/// A panel's content for `kind` under a given id. The console is locked: always on the board.
 fn panel_of(kind: Kind, id: PanelId) -> DockPanel {
 	DockPanel {
+		id,
 		title: kind.title().into(),
 		content: rsx! { KindView { kind } },
 		min: kind.min(),
-		label: Some(rsx! { TabLabel { id: id.clone(), title: kind.title() } }),
-		id,
+		locked: kind == Kind::Console,
+		..
 	}
 }
 
-/// A tab's label: its title and a `×` closing it.
-#[component]
-fn TabLabel(id: PanelId, title: &'static str) -> Element {
-	let api = use_context::<Signal<Option<PackedApi>>>();
-	rsx! {
-		span { "{title}" }
-		button {
-			class: "tl-action",
-			title: "Close",
-			onclick: move |_| api().expect("a tab shows once the dock entered a band").close(&id),
-			"×"
-		}
-	}
-}
-
-/// The header's buttons, right of the tabs.
-fn tile_actions(pending: Signal<Option<GroupId>>) -> Callback<Tile, Element> {
+/// The host's own header buttons, before the framework's: maximize and collapse.
+fn tile_actions() -> Callback<Tile, Element> {
 	Callback::new(
 		move |Tile {
 		          group,
-		          active,
 		          maximized,
 		          collapsed,
+		          floating,
 		          mut api,
+		          ..
 		      }: Tile| {
-			let mut pending = pending;
 			rsx! {
-				button { class: "tl-action", title: "Keybinds", onclick: move |_| api.help(group), "?" }
-				button { class: "tl-action", title: "Add window as a tab", onclick: move |_| pending.set(Some(group)), "+" }
 				button { class: "tl-action", title: if maximized { "Restore" } else { "Maximize" }, onclick: move |_| api.maximize(group), if maximized { "⤡" } else { "⤢" } }
-				button { class: "tl-action", title: if collapsed { "Expand" } else { "Collapse" }, onclick: move |_| api.collapse(group), if collapsed { "▸" } else { "◂" } }
-				button { class: "tl-action", title: "Close", onclick: move |_| api.close(&active), "✕" }
+				if !floating {
+					button { class: "tl-action", title: if collapsed { "Expand" } else { "Collapse" }, onclick: move |_| api.collapse(group), if collapsed { "▸" } else { "◂" } }
+				}
 			}
 		},
 	)
@@ -267,6 +253,16 @@ fn app() -> Element {
 		let h = 8 + (xorshift(&mut s) % 12) as u32;
 		spawn(kind, w, h, panels, counter, a);
 	};
+	// A window opened straight into the float layer, over the board.
+	let float_news = move |_| {
+		let Some(mut a) = api() else { return };
+		let (mut panels, mut counter) = (panels, counter);
+		let panel = make_panel(Kind::News, &mut counter);
+		let id = panel.id.clone();
+		panels.write().push(panel);
+		let gid = a.mint_group_id();
+		a.float(Group::new(gid, id), 16, 12);
+	};
 
 	rsx! {
 		div { style: "position:fixed; inset:0; display:flex; flex-direction:column; background:#0b0f0e;",
@@ -281,13 +277,24 @@ fn app() -> Element {
 					onclick: add_random,
 					"+"
 				}
+				button {
+					style: "cursor:pointer; border:1px solid #63e9cd; background:transparent; color:#63e9cd;
+						width:26px; height:26px; border-radius:4px; font:600 14px system-ui; line-height:1;",
+					title: "Open a floating window",
+					onclick: float_news,
+					"⧉"
+				}
 			}
 			div { style: "flex:1 1 auto; position:relative;",
 				PackedArea {
 					panels,
 					on_band: Some(on_band),
 					config: Some(insilico_config(api)),
-					actions: Some(tile_actions(pending)),
+					actions: Some(tile_actions()),
+					on_add: Some(Callback::new(move |g| {
+						let mut pending = pending;
+						pending.set(Some(g));
+					})),
 				}
 			}
 			if let Some(gid) = pending() {

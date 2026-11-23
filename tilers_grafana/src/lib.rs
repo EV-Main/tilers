@@ -211,9 +211,7 @@ pub fn mount(root: HtmlElement, mut seeds: Vec<Seed>, storage_key: String, publi
 		let request_tab: Arc<dyn Fn(GroupId) + Send + Sync> = Arc::new(move |gid: GroupId| {
 			request_tab.call1(&JsValue::NULL, &JsValue::from(gid.0)).expect("request_tab handler threw");
 		});
-		let view = mount_to(root, move || {
-			view! { <PackedArea panels=panels config=config on_band=on_band request_tab=request_tab /> }.into_any()
-		});
+		let view = mount_to(root, move || view! { <PackedArea panels=panels config=config on_band=on_band on_add=request_tab /> }.into_any());
 		(panels, api, view)
 	});
 	Dock { panels, api, view, owner }
@@ -236,5 +234,6 @@ fn slot(seed: &Seed, on_slot: &SendWrapper<Function>) -> DockPanel {
 			});
 			view! { <div class="tl-grafana-slot" data-panel=key node_ref=node></div> }.into_any()
 		}),
+		..
 	}
 }

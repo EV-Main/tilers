@@ -10,7 +10,8 @@
 use std::collections::HashMap;
 
 use tilers_core::{
-	Band, Config, Group, GroupId, PackedState, PanelId, Step,
+	Band, Config, Declared, Group, GroupId, PackedState, PanelId, Step,
+	keys::Builtin,
 	model::packed::{DropTarget, MinSize, PackedGrid},
 };
 use v_utils::fuzz::Frng;
@@ -32,8 +33,8 @@ pub struct World {
 	pub state: PackedState,
 	pub cfg: Config,
 	pub next_panel: u64,
-	/// What a binding's panel list declares: every minted panel's min, mirrored into the state.
-	pub mins: HashMap<PanelId, MinSize>,
+	/// What a binding's panel list declares: every minted panel's min and lock, mirrored into the state.
+	pub panels: HashMap<PanelId, Declared>,
 	pub origin: (f64, f64),
 	pub size: (f64, f64),
 	/// The root's scroll offset, `(left, top)`, as the binding reports it.
@@ -58,21 +59,32 @@ pub struct World {
 }
 
 impl World {
-	/// A new panel in the host's list, declaring `min` — mirrored the way a binding does on every
-	/// panels change.
-	pub fn mint_panel(&mut self, min: MinSize) -> PanelId {
+	/// A new panel in the host's list, declaring `min` and `locked` — mirrored the way a binding does on
+	/// every panels change.
+	pub fn mint_panel(&mut self, min: MinSize, locked: bool) -> PanelId {
 		let id = PanelId(format!("p{}", self.next_panel));
 		self.next_panel += 1;
-		self.mins.insert(id.clone(), min);
-		self.state.set_mins(self.mins.clone());
+		self.panels.insert(id.clone(), Declared { min, locked });
+		self.state.set_panels(self.panels.clone());
 		id
+	}
+
+	/// Every hosted panel's group, tiles' and floats'.
+	pub fn homes(&self) -> HashMap<PanelId, GroupId> {
+		let g = self.state.grid();
+		g.cells
+			.iter()
+			.map(|c| &c.group)
+			.chain(g.floats.iter().map(|f| &f.group))
+			.flat_map(|g| g.tabs.iter().map(|p| (p.clone(), g.id)))
+			.collect()
 	}
 
 	/// `grid` as a fresh state at this world's geometry and mins settles it — the public path a
 	/// stored layout comes back through.
 	pub fn settled(&self, grid: &PackedGrid) -> Result<PackedGrid, String> {
 		let mut fresh = PackedState::new(self.cfg.clone());
-		fresh.set_mins(self.mins.clone());
+		fresh.set_panels(self.panels.clone());
 		fresh.set_measure(self.origin, self.size, self.framed);
 		fresh.load(&tilers_core::model::serial::save(grid)).map_err(|e| format!("load of our own save failed: {e:?}"))?;
 		Ok(fresh.grid().clone())
@@ -90,10 +102,10 @@ impl World {
 	pub fn shown_step(&self) -> (f64, f64) {
 		let (sw, least) = self.step_px();
 		let cells = &self.state.grid().cells;
-		let sh = self.state.frames(&HashMap::new()).iter().filter(|f| !f.shadow && !f.style.contains('%')).find_map(|f| {
+		let sh = self.state.frames(&HashMap::new()).iter().filter(|f| !f.shadow && !f.floating && !f.maximized).find_map(|f| {
 			let c = cells.iter().find(|c| c.group.id == f.gid)?;
 			let at = f.style.find("height:").expect("a placed tile has a px height") + "height:".len();
-			let s = f.style[at..].trim_start_matches("calc("); // inset by the gap
+			let s = &f.style[at..];
 			let h: f64 = s[..s.find("px").expect("px unit")].parse().expect("a number");
 			Some(h / c.h as f64)
 		});
@@ -168,12 +180,12 @@ impl World {
 		let min = MinSize::Steps { w: Step(1), h: Step(1) };
 		for (fw, fh) in [(0.25, 0.3), (0.3, 0.25), (0.2, 0.4), (0.35, 0.3)] {
 			let gid = self.state.mint_group_id();
-			let panel = self.mint_panel(min);
+			let panel = self.mint_panel(min, false);
 			let (w, h) = (((cols as f64 * fw) as u32).max(1), ((rows as f64 * fh) as u32).max(1));
 			self.state.place(Group::new(gid, panel), w, h);
 		}
 		// give the first tile a second tab so tab-tears have something to bite on from the start.
-		let extra = self.mint_panel(min);
+		let extra = self.mint_panel(min, false);
 		self.state.add_tab(GroupId(0), extra);
 	}
 
@@ -222,8 +234,27 @@ pub fn run(seed: u64, size: usize, verbose: bool, observe: &mut dyn FnMut(Option
 		if verbose {
 			eprintln!("step {step} (cols={}, {}x{}): {action:?}", world.state.cols(), world.size.0, world.size.1);
 		}
+		let homes = world.homes();
 		if let Err(what) = actions::apply(&action, &mut world, &mut |w| observe(Some(&action), w)) {
 			return Err(Failure { step, what });
+		}
+		// The user can't close or move a locked panel; undo walks history, a band crossing re-seeds, and the host may.
+		let user = !matches!(action, actions::Action::Measure { .. } | actions::Action::Toggle { .. })
+			&& !matches!(
+				action,
+				actions::Action::Key {
+					aim: actions::Aim::Builtin(Builtin::Undo | Builtin::Redo),
+					..
+				}
+			);
+		if user {
+			let now = world.homes();
+			if let Some((p, g)) = homes.iter().find(|(p, g)| world.panels[*p].locked && now.get(*p) != Some(*g)) {
+				return Err(Failure {
+					step,
+					what: format!("locked panel {} left group {g:?}: now {:?}", p.0, now.get(p)),
+				});
+			}
 		}
 		// A resize left mid-gesture is a legitimate resting place (the user is still holding the grip),
 		// and the packed invariant is only claimed once it settles.
@@ -255,7 +286,7 @@ fn seed_world(frng: &mut Frng, seed: u64) -> World {
 		state: PackedState::new(cfg.clone()),
 		cfg,
 		next_panel: 0,
-		mins: HashMap::new(),
+		panels: HashMap::new(),
 		// A non-zero root origin, so a lost `- origin` in the pointer mapping can't pass unnoticed.
 		origin: (17.0, 23.0),
 		size: (0.0, 0.0),

@@ -55,7 +55,7 @@ const C_FG: &str = "#ddd";
 /// `--tl-shadow-bg` is `rgba(160,160,160,0.18)`; flattened over the tile bg so the landing cell is
 /// legible at film scale.
 const C_SHADOW: &str = "#3d3d3d";
-const BUCKETS: [&str; 34] = [
+const BUCKETS: [&str; 38] = [
 	"Measure",
 	"Place",
 	"AddTab",
@@ -90,6 +90,10 @@ const BUCKETS: [&str; 34] = [
 	"Scroll",
 	"DragEnterTab",
 	"Carry",
+	"Float",
+	"Toggle",
+	"key Collapse",
+	"key Float",
 ];
 /// Every flag also reads a `FILM_*` variable, so the film is scriptable from an env without a
 /// second code path; clap's precedence puts the flag first.
@@ -198,6 +202,8 @@ fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 			A::Scroll { .. } => 31,
 			A::DragEnterTab { .. } => 32,
 			A::Carry { .. } => 33,
+			A::Float { .. } => 34,
+			A::Toggle { .. } => 35,
 		};
 	if let A::Drag { grab, commit, .. } = action {
 		m |= 1 << if world.resolved.is_empty() { 10 } else { 9 };
@@ -228,6 +234,8 @@ fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 				Aim::Builtin(B::Cache) => 24,
 				Aim::Builtin(B::Publish) => 25,
 				Aim::Escape => 26,
+				Aim::Builtin(B::Collapse) => 36,
+				Aim::Builtin(B::Float) => 37,
 				Aim::Builtin(b) => unreachable!("{b:?} has no bucket"),
 			};
 		if actions::noisy(inputs) {
@@ -248,7 +256,9 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 	use actions::{Action as A, Grab};
 	match action {
 		A::Measure { w, h, framed } => format!("Measure {w:.0}x{h:.0}{}", if *framed { " framed" } else { "" }),
-		A::Place { w, h, min } => format!("Place {w}x{h} min={}", min_label(min)),
+		A::Place { w, h, min, locked } => format!("Place {w}x{h} min={}{}", min_label(min), if *locked { " locked" } else { "" }),
+		A::Float { w, h, min, locked } => format!("Float {w}x{h} min={}{}", min_label(min), if *locked { " locked" } else { "" }),
+		A::Toggle { group } => format!("Toggle float g{}", group.0),
 		A::AddTab { group, .. } => format!("AddTab into g{}", group.0),
 		A::Focus { group } => format!("Focus g{}", group.0),
 		A::Drag { grab, commit, .. } => {
@@ -264,10 +274,10 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 			};
 			format!("Drag {what} -> {to}{}", if *commit { "" } else { " [cancelled]" })
 		}
-		A::Resize { idx, commit, .. } => format!("Resize tile #{idx}{}", if *commit { "" } else { " [still held]" }),
+		A::Resize { group, commit, .. } => format!("Resize g{}{}", group.0, if *commit { "" } else { " [still held]" }),
 		A::Key { inputs, aim } => format!("Key {aim:?}{}", if actions::noisy(inputs) { " [noisy]" } else { "" }),
 		A::SaveLoad => "SaveLoad".to_string(),
-		A::SetMins { panel, min } => format!("SetMins {} = {}", panel.0, min_label(min)),
+		A::SetMins { panel, min, locked } => format!("SetMins {} = {}{}", panel.0, min_label(min), if *locked { " locked" } else { "" }),
 		A::Scroll { at: (x, y) } => format!("Scroll to {x:.0},{y:.0}px"),
 		A::DragEnterTab { group, panel } => format!("DragEnterTab {} in g{}", panel.0, group.0),
 		A::Carry { panel, commit, .. } => {

@@ -1,3 +1,4 @@
+#![feature(default_field_values)]
 //! A minimal Leptos smoke example proving one [`tilers_core`] engine drives the Leptos binding
 //! exactly as it drives the Dioxus one: a handful of static panes seeded through the same
 //! [`PackedApi`], laid out by the same reducer. **Web-only** — run with `trunk serve` (or any CSR
@@ -6,7 +7,7 @@
 use std::sync::Arc;
 
 use leptos::prelude::*;
-use tilers_leptos::{Config, DockPanel, Group, GroupId, MinSize, PackedApi, PackedArea, PanelId, Step};
+use tilers_leptos::{Config, DockPanel, Group, MinSize, PackedApi, PackedArea, PanelId, Step};
 
 fn main() {
 	#[cfg(target_arch = "wasm32")]
@@ -33,6 +34,7 @@ fn make_panel(kind: &str, n: u64) -> DockPanel {
 			.into_any()
 		}),
 		min: MinSize::Steps { w: Step(3), h: Step(2) },
+		..
 	}
 }
 
@@ -53,8 +55,6 @@ fn seed(api: PackedApi, panels: RwSignal<Vec<DockPanel>>) {
 fn App() -> impl IntoView {
 	let panels = RwSignal::new(Vec::<DockPanel>::new());
 	let on_band: Arc<dyn Fn(PackedApi) + Send + Sync> = Arc::new(move |api: PackedApi| seed(api, panels));
-	// The `+` button target: this smoke has no catalog, so it's a no-op.
-	let request_tab: Arc<dyn Fn(GroupId) + Send + Sync> = Arc::new(|_gid| {});
 
 	view! {
 		<div style="position:fixed; inset:0; display:flex; flex-direction:column; background:#0b0f0e;">
@@ -67,7 +67,6 @@ fn App() -> impl IntoView {
 					panels=panels
 					config=Config::default()
 					on_band=on_band
-					request_tab=request_tab
 				/>
 			</div>
 		</div>
