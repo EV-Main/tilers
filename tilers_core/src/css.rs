@@ -61,7 +61,7 @@ pub const CSS: &str = r#"
 /* Just before the band a host dock's own grip may cover when this dock is framed in one of its tiles:
    the view's last two grip-thicknesses (a host's root font may be larger) and its 1px border. Measured
    from inside the tile's 1px border. A tile is inset by half the gap, which only moves these further in. */
-:where(.tl-resize-wall) { right: calc(var(--tl-title-h, 2rem) / 4); cursor: w-resize; }
+:where(.tl-resize-wall) { left: calc(var(--tl-wall) - var(--tl-gap, 0px) / 2 - 2px - var(--tl-title-h, 2rem) * 3 / 8); cursor: w-resize; }
 :where(.tl-resize-fold) { left: 0; right: 0; top: calc(var(--tl-fold) - var(--tl-gap, 0px) / 2 - 2px - var(--tl-title-h, 2rem) * 3 / 8); height: calc(var(--tl-title-h, 2rem) / 8); cursor: n-resize; }
 :where(.tl-resize-right) { right: 0; }
 :where(.tl-resize-bottom:hover, .tl-resize-fold:hover, .tl-resize-left:hover, .tl-resize-right:hover, .tl-resize-wall:hover) { background: var(--tl-resize-bg, #555); }
@@ -80,6 +80,8 @@ pub const CSS: &str = r#"
    scrollbar is never legitimate — clip it. Only the vertical axis (whitespace/stack below) scrolls. */
 :where(.tl-packed) { position: relative; width: 100%; height: 100%; overflow-x: hidden; overflow-y: auto;
 	color: var(--tl-fg, #ddd); font: 0.8125rem/1.4 system-ui, sans-serif; }
+/* `Config::scroll_x`: the grid runs past the view's width, so this axis scrolls too. */
+:where(.tl-scroll-x) { overflow-x: auto; }
 /* Inset by half `--tl-gap` in the state's inline rect, as is each panel's slot. */
 :where(.tl-tile) { position: absolute; overflow: hidden; box-sizing: border-box; border-radius: var(--tl-radius, 0px);
 	background: var(--tl-group-bg, #1e1e1e); border: 1px solid var(--tl-tab-border, #333); }

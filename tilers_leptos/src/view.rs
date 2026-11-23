@@ -141,7 +141,7 @@ pub fn PackedArea(
 	#[prop(optional)] request_tab: Option<Arc<dyn Fn(GroupId) + Send + Sync>>,
 ) -> impl IntoView {
 	let cfg = config.unwrap_or_default();
-	let title_h_rem = cfg.title_h_rem;
+	let (title_h_rem, scroll_x) = (cfg.title_h_rem, cfg.scroll_x);
 	let state = RwSignal::new_local(PackedState::new(cfg));
 	let api = PackedApi { state, panels };
 	let root = NodeRef::<leptos::html::Div>::new();
@@ -293,13 +293,13 @@ pub fn PackedArea(
 		// `--tl-title-h` is the stylesheet's one knob for the chrome band; the state resolves the same
 		// rem to px for the content overlay's offset.
 		<div
-			class="tl-packed"
+			class=if scroll_x { "tl-packed tl-scroll-x" } else { "tl-packed" }
 			node_ref=root
 			style=format!("--tl-title-h: {title_h_rem}rem;")
 			on:scroll=move |_| {
-				let y = root.get_untracked().expect("a scroll comes from the mounted root").scroll_top()
-					as f64;
-				state.update(|s| s.set_scroll(y));
+				let root = root.get_untracked().expect("a scroll comes from the mounted root");
+				let at = (root.scroll_left() as f64, root.scroll_top() as f64);
+				state.update(|s| s.set_scroll(at));
 			}
 			on:dragover=move |e: web_sys::DragEvent| {
 				if state.with_untracked(|s| s.carrying()) {

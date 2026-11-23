@@ -1,6 +1,6 @@
 //! State-aware action enum + generator. Every action is an *input event* — a measure, a pointer
 //! path, a keystroke — driven at the same entry points a binding calls, so `resolve_target`, the
-//! drag threshold, the preview, the ghost, the breakpoint math and the undo history are all on the
+//! drag threshold, the preview, the ghost, the band math and the undo history are all on the
 //! fuzzed path. The generator enumerates only valid targets each step (matklad's "non-crashed
 //! replicas only") so no entropy is spent on impossible picks.
 //!
@@ -45,7 +45,7 @@ const CARRY: usize = 11;
 
 #[derive(Clone, Debug)]
 pub enum Action {
-	/// A container resize, through `set_measure` → `Breakpoint` → `scale_cols` → `refit`.
+	/// A container resize, through `set_measure` → `Band` → `cols` → `refit`.
 	Measure {
 		w: f64,
 		h: f64,
@@ -88,7 +88,7 @@ pub enum Action {
 	/// The root scrolled: where a tile shows, and so where a tile running past the view's bottom has
 	/// its fold grip.
 	Scroll {
-		y: f64,
+		at: (f64, f64),
 	},
 	/// A host re-declaring a panel's min in its panel list. The floor is unbounded by the tile's
 	/// current span, which is the case `resize` never produces.
@@ -217,9 +217,9 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 			world.mins.insert(panel.clone(), *min);
 			world.state.set_mins(world.mins.clone());
 		}
-		Action::Scroll { y } => {
-			world.scroll = *y;
-			world.state.set_scroll(*y);
+		Action::Scroll { at } => {
+			world.scroll = *at;
+			world.state.set_scroll(*at);
 		}
 		Action::Carry { panel, path, out, commit } => return carry(panel, path, *out, *commit, world, mid),
 		Action::DragEnterTab { group, panel } => {
@@ -269,11 +269,11 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 	let ws: Vec<u32> = avail.iter().map(|&k| weights[k].max(1)).collect();
 	let kind = avail[frng.weighted(&ws)];
 	let (sw, sh) = world.shown_step();
-	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
+	let (ox, oy) = (world.origin.0 - world.scroll.0, world.origin.1 - world.scroll.1);
 
 	Some(match kind {
 		MEASURE => {
-			// Half the draws land on a band boundary, half anywhere — so `Breakpoint::of`'s edges are hit
+			// Half the draws land on a band boundary, half anywhere — so `Band::of`'s edges are hit
 			// exactly instead of being left to a 1-in-1600 chance.
 			let w = if frng.below(2) == 0 {
 				EDGES[frng.below(EDGES.len() as u32) as usize]
@@ -402,9 +402,15 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		SCROLL => {
 			// Anywhere the content reaches, as a browser clamps it.
 			let bottom = cells.iter().map(|c| c.y + c.h).max().unwrap_or(0) as f64 * sh;
-			Action::Scroll {
-				y: frng.below((bottom - world.size.1).max(0.0) as u32 + 1) as f64,
-			}
+			let right = cells.iter().map(|c| c.x + c.w).max().unwrap_or(0) as f64 * sw;
+			let y = frng.below((bottom - world.size.1).max(0.0) as u32 + 1) as f64;
+			// Sideways only a scroll_x root runs past its view.
+			let x = if world.cfg.scroll_x {
+				frng.below((right - world.size.0).max(0.0) as u32 + 1) as f64
+			} else {
+				0.0
+			};
+			Action::Scroll { at: (x, y) }
 		}
 		SET_MINS => {
 			let c = &cells[frng.below(cells.len() as u32) as usize];
@@ -639,7 +645,7 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 fn resolve(world: &World, source: &DragSource, grab: (f64, f64), cursor: (f64, f64)) -> DropTarget {
 	let grid = world.state.grid();
 	let (sw, sh) = world.shown_step();
-	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
+	let (ox, oy) = (world.origin.0 - world.scroll.0, world.origin.1 - world.scroll.1);
 	let c = grid
 		.cells
 		.iter()
@@ -749,7 +755,7 @@ fn save_load(world: &mut World) -> Result<(), String> {
 fn aim(frng: &mut Frng, world: &World) -> (f64, f64) {
 	let cells = &world.state.grid().cells;
 	let (sw, sh) = world.shown_step();
-	let (ox, oy) = (world.origin.0, world.origin.1 - world.scroll);
+	let (ox, oy) = (world.origin.0 - world.scroll.0, world.origin.1 - world.scroll.1);
 	match frng.below(5) {
 		// A tile's body: resolves to a displace at the row below it.
 		0 if !cells.is_empty() => {

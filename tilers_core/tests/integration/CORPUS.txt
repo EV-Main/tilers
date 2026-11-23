@@ -52,3 +52,4 @@ sim 9500702941289606165 189 3000123430  # a press refused mid-resize never click
 sim 151 208 1496721176  # a maximized spine rendered width grips, so a resize set its derived width
 sim 41 66 1496721176  # a spine's grips were looked up in the live grid by the preview's index
 sim 0 16 1496721176  # the tile rect gained the gap's `calc(`, which the row reader parsed as a number
+sim 2661570903866082864 16 1810610659  # a scroll_x tile's Wall, off the grid's bound, let its tile grow under the host's grip

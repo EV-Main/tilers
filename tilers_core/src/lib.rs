@@ -16,7 +16,7 @@ pub mod state;
 
 mod css;
 mod persist;
-pub use config::{Band, Breakpoint, Config};
+pub use config::{Band, Config};
 pub use css::CSS;
 pub use model::{
 	Group, GroupId, PanelId,

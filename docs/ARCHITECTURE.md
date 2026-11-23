@@ -51,9 +51,8 @@ flowchart LR
 - `keys` — tilers' `Command`s (`Builtin` + host `Custom`) and the default keymap over
   `ev_lib::keymap`: a root of undo/redo chords plus the leader as a root scope. Keymap, trie,
   `KeyInput` normalization and rendering are the library's; `keys` re-exports what hosts name.
-- `config` — `Config` (steps/row height/keymap/storage key/publish hook),
-  `Breakpoint` (5 widths, sets the column count) and `Band` (3 widths, the persistence
-  key).
+- `config` — `Config` (steps/row height/keymap/storage key/publish hook/`scroll_x`) and `Band`
+  (3 widths: the persistence key and the column count).
 - `persist` — `localStorage` read/write, wasm-only (a native no-op), crate-internal.
 - `css` — the one structural stylesheet, every selector in `:where()` so a host's rule always wins;
   colors and sizes are `--tl-*` custom properties.
@@ -79,9 +78,9 @@ stays inside that crate. It is released as a plugin zip on `grafana-v*` tags, no
 
 ## The seed cache
 
-A layout is stored per `Band` (`sm`/`md`/`xl`), not per `Breakpoint`: neighbouring
-breakpoints differ only in column count, which `refit` handles, while a phone-sized
-arrangement is genuinely worth keeping apart from a desktop one.
+A layout is stored per `Band` (`sm`/`md`/`xl`), which also sets the column count: a band's layout
+is the same grid at every width the band covers, only stretched, so it spans the view wherever it
+was laid out, while a phone-sized arrangement is kept apart from a desktop one.
 
 `PackedState::take_band` is the latch. Both bindings call it after *every* measure; it
 returns `Some(restored)` only when a real step size has landed and the band differs from
@@ -128,6 +127,10 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   `Config::row_h_rem`, at which a deeper one scrolls. The container's height decides how long a row
   renders, never where a tile is in the grid or how many rows it spans. A gesture holds the row it
   started on, so the grid under the pointer stays still.
+- Sideways a grid fits its view: `cols` is its band's, the step `width / cols`. With
+  `Config::scroll_x` it runs on past it instead, as rows do downward: square steps of
+  `row_h_rem`, stretched so a layout narrower than the view ends at its right edge, scrolling when
+  wider. Either way the container's width decides how wide a column renders, never where a tile is.
 - A collapsed tile is a spine as wide as the title bar is tall, at the live step: derived like a
   floor, never stored. What is layout is that it is collapsed and the width it opens back to
   (`Cell::collapsed`). Nothing but opening sets a spine's width, so it has no width grips.

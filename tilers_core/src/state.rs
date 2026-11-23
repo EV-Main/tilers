@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use ev_lib::keymap::{Platform, Step, Trie};
 
 use crate::{
-	config::{Band, Breakpoint, Config},
+	config::{Band, Config},
 	keys::{Builtin, Command, Help, Hint, KeyInput, KeyOutcome},
 	model::{
 		Group, GroupId, PanelId,
@@ -30,6 +30,8 @@ use crate::{
 /// Root font size assumed before the first measure, and on a non-DOM target (the fuzzer). Every
 /// browser's default.
 const REM_PX: f64 = 16.0;
+/// Columns a [`Config::scroll_x`] grid may run to: past any view, and few enough that packing a tile scans them all.
+const SCROLL_COLS: u32 = 1024;
 /// The space between tiles: each tile and its panels' slots are inset by half of it, so the grid stays unit-free.
 const GAP: &str = "var(--tl-gap, 0px)";
 /// A press promotes to a drag only past this many px, so a click still activates a tab.
@@ -39,7 +41,7 @@ const DRAG_THRESHOLD: f64 = 4.0;
 const MAX_AUTOSCROLL: f64 = 20.0;
 
 /// Everything the packed layout needs to render and mutate itself, on one struct. The engine's
-/// grid plus the live view geometry (`cols`/`step_px`/`breakpoint`/`root_*`, set by the measure),
+/// grid plus the live view geometry (`cols`/`step_px`/`band`/`root_*`, set by the measure),
 /// the in-flight gestures (`drag`/`resize`), the keyboard-driven pane state
 /// (`focused`/`maximized`/`help`/`popups`/`pending`/`notice`), the undo history, the `shown` band latch, and
 /// the host `cfg`.
@@ -55,13 +57,13 @@ pub struct PackedState {
 	/// Every panel's declared min, mirrored from the binding's panel list. Host intent, not layout:
 	/// cell floors are re-derived from it ([`refloor`](Self::refloor)) whenever the step or a tile's tabs change.
 	mins: HashMap<PanelId, MinSize>,
-	breakpoint: Breakpoint,
+	band: Band,
 	drag: Option<Drag>,
 	resize: Option<ResizeStart>,
 	root_origin: (f64, f64),
 	root_size: (f64, f64),
-	/// The root's scroll offset: the tiles live in its scrolled content, the pointer in client px.
-	scroll: f64,
+	/// The root's scroll offset, `(left, top)`: the tiles live in its scrolled content, the pointer in client px.
+	scroll: (f64, f64),
 	/// The view's edges may lie under a host's grips (see [`framed`]).
 	framed: bool,
 	/// The pane keyboard ops act on: set when a tile's header/tab/body is pressed. `maximized` is a
@@ -105,12 +107,12 @@ impl PackedState {
 			step_px: (0.0, 0.0),
 			rem_px: REM_PX,
 			mins: HashMap::new(),
-			breakpoint: Breakpoint::default(),
+			band: Band::default(),
 			drag: None,
 			resize: None,
 			root_origin: (0.0, 0.0),
 			root_size: (0.0, 0.0),
-			scroll: 0.0,
+			scroll: (0.0, 0.0),
 			framed: false,
 			focused: None,
 			maximized: None,
@@ -259,11 +261,12 @@ impl PackedState {
 		let (mut left, mut right, mut h) = (c.x, c.x + c.w, c.h);
 		match r.grip {
 			Grip::Left => left = shift(left, r.press_at.0, r.cursor.0, sw),
-			Grip::Right | Grip::Wall => right = shift(right, r.press_at.0, r.cursor.0, sw),
+			Grip::Right => right = shift(right, r.press_at.0, r.cursor.0, sw),
+			Grip::Wall => right = shift(right, r.press_at.0, r.cursor.0, sw).min(right), // the view's edge holds it in
 			Grip::Bottom => h = shift(h, r.press_at.1, r.cursor.1, sh),
 			// Above the fold the tile's bottom is where it shows: pulling up brings it to the pointer.
 			Grip::Fold if shift(h, r.press_at.1, r.cursor.1, sh) < h => {
-				let row = ((r.cursor.1 - self.root_origin.1 + self.scroll) / sh).round() as i64;
+				let row = ((r.cursor.1 - self.root_origin.1 + self.scroll.1) / sh).round() as i64;
 				h = (row - c.y as i64).clamp(1, h as i64) as u32;
 			}
 			Grip::Fold => {}
@@ -368,15 +371,14 @@ impl PackedState {
 		let (sw, row) = self.step_px;
 		let layout = self.resize.as_ref().map_or(&self.grid, |r| &r.press);
 		let depth = layout.cells.iter().map(|c| c.y + c.h).max().unwrap_or(0);
-		if depth == 0 {
-			return (sw, row);
-		}
-		(sw, row.max((self.root_size.1 / depth as f64 * 64.0).floor() / 64.0))
+		let extent = layout.cells.iter().map(|c| c.x + c.w).max().unwrap_or(0);
+		let fill = |least: f64, view: f64, n: u32| if n == 0 { least } else { least.max((view / n as f64 * 64.0).floor() / 64.0) };
+		(if self.cfg.scroll_x { fill(sw, self.root_size.0, extent) } else { sw }, fill(row, self.root_size.1, depth))
 	}
 
-	/// The band the layout is stored under — coarser than the [`Breakpoint`] driving `cols`.
+	/// The band the layout is stored under, which sets `cols`.
 	pub fn band(&self) -> Band {
-		self.breakpoint.band()
+		self.band
 	}
 
 	/// Title-bar height in px — the one resolution of [`Config::title_h_rem`], used for the content
@@ -414,17 +416,20 @@ impl PackedState {
 		if width <= 0.0 || height <= 0.0 {
 			return;
 		}
-		let steps = self.cfg.steps.max(1);
-		let bp = Breakpoint::of(width);
-		let c = bp.scale_cols(steps);
-		self.breakpoint = bp;
-		self.cols = c;
-		self.step_px = (width / c as f64, self.cfg.row_h_rem * self.rem_px);
+		self.band = Band::of(width);
+		let row = self.cfg.row_h_rem * self.rem_px;
+		(self.cols, self.step_px) = if self.cfg.scroll_x {
+			(SCROLL_COLS, (row, row))
+		} else {
+			let c = self.band.cols(self.cfg.steps.max(1));
+			(c, (width / c as f64, row))
+		};
 		self.refloor();
 	}
 
-	pub fn set_scroll(&mut self, y: f64) {
-		self.scroll = y;
+	/// The root's scroll offset, `(left, top)`.
+	pub fn set_scroll(&mut self, at: (f64, f64)) {
+		self.scroll = at;
 		if let Some(c) = self.drag.as_ref().filter(|d| d.armed).map(|d| d.cursor) {
 			self.drag_move(c); // the cursor now sits over other content
 		}
@@ -626,10 +631,10 @@ impl PackedState {
 		let cy = cursor.1 - d.grab.1 + d.src_h as f64 * sh / 2.0;
 		let mut t = self.grid.resolve_target(
 			&d.source,
-			cx - ox,
-			cy - oy + self.scroll,
-			cursor.0 - ox,
-			cursor.1 - oy + self.scroll,
+			cx - ox + self.scroll.0,
+			cy - oy + self.scroll.1,
+			cursor.0 - ox + self.scroll.0,
+			cursor.1 - oy + self.scroll.1,
 			sw,
 			sh,
 			self.title_h(),
@@ -761,8 +766,21 @@ impl PackedState {
 			e.scroll_by_with_x_and_y(0.0, step);
 			break;
 		}
+		// Sideways only the root itself runs past its view.
+		if self.cfg.scroll_x {
+			let x = self.drag.as_ref().expect("armed, checked above").cursor.0;
+			let vw = window.inner_width().expect("innerWidth never throws").as_f64().expect("innerWidth is a number");
+			let left = root.get_bounding_client_rect().left() + root.client_left() as f64;
+			let (back, on) = (ramp(x - left.max(0.0)), ramp((left + root.client_width() as f64).min(vw) - x));
+			let (at, max) = (root.scroll_left() as f64, (root.scroll_width() - root.client_width()) as f64);
+			if back >= on && back > 0.0 && at > 0.0 {
+				root.scroll_by_with_x_and_y(-back.ceil(), 0.0);
+			} else if on > 0.0 && at < max {
+				root.scroll_by_with_x_and_y(on.ceil(), 0.0);
+			}
+		}
 		let r = root.get_bounding_client_rect();
-		let (origin, scroll) = ((r.x(), r.y()), root.scroll_top() as f64);
+		let (origin, scroll) = ((r.x(), r.y()), (root.scroll_left() as f64, root.scroll_top() as f64));
 		if origin == self.root_origin && scroll == self.scroll {
 			return false;
 		}
@@ -1083,21 +1101,29 @@ impl PackedState {
 	/// styles. A boundary between two tiles is the left one's right grip alone, so a left grip exists
 	/// only on a free left edge. In a [`framed`] view, a grip that would lie on the view's own edge,
 	/// under a host's grip, keeps clear of it: the right one of a tile
-	/// on the view's right edge is a [`Grip::Wall`], the bottom one of a tile reaching that band a
-	/// [`Grip::Fold`], which the stylesheet places from `--tl-fold`, the view's bottom
-	/// below the tile's top.
+	/// reaching the band at the view's right is a [`Grip::Wall`], the bottom one of a tile reaching that
+	/// band at its bottom a [`Grip::Fold`], which the stylesheet places from `--tl-wall`/`--tl-fold`,
+	/// the view's edge right of the tile's left/below its top.
 	fn grips(&self, g: &PackedGrid, idx: usize, maximized: bool) -> Vec<(Grip, String)> {
 		let c = &g.cells[idx];
-		let sh = self.step().1;
-		let view_bottom = self.scroll + self.root_size.1;
+		let (sw, sh) = self.step();
+		let (view_right, view_bottom) = (self.scroll.0 + self.root_size.0, self.scroll.1 + self.root_size.1);
+		let (left, right) = (c.x as f64 * sw, (c.x + c.w) as f64 * sw);
 		let (top, bottom) = (c.y as f64 * sh, (c.y + c.h) as f64 * sh);
 		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
 		// A host's grip is guessed at most twice ours: its root font may be larger.
+		let walled = self.framed && !maximized && left < view_right && right > view_right - 2.0 * grip;
 		let folded = self.framed && !maximized && top < view_bottom && bottom > view_bottom - 2.0 * grip;
 		let spine = c.collapsed.is_some(); // a spine's width is derived, so it has no grip that sets one, maximized or not
 		[
 			(!spine && g.free_left(idx)).then_some((Grip::Left, String::new())),
-			(!spine).then(|| (if self.framed && !maximized && c.x + c.w == self.cols { Grip::Wall } else { Grip::Right }, String::new())),
+			(!spine).then(|| {
+				if walled {
+					(Grip::Wall, format!("--tl-wall:{}px;", view_right - left))
+				} else {
+					(Grip::Right, String::new())
+				}
+			}),
 			Some(if folded {
 				(Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top))
 			} else {

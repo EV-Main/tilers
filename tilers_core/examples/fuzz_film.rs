@@ -268,7 +268,7 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 		A::Key { inputs, aim } => format!("Key {aim:?}{}", if actions::noisy(inputs) { " [noisy]" } else { "" }),
 		A::SaveLoad => "SaveLoad".to_string(),
 		A::SetMins { panel, min } => format!("SetMins {} = {}", panel.0, min_label(min)),
-		A::Scroll { y } => format!("Scroll to {y:.0}px"),
+		A::Scroll { at: (x, y) } => format!("Scroll to {x:.0},{y:.0}px"),
 		A::DragEnterTab { group, panel } => format!("DragEnterTab {} in g{}", panel.0, group.0),
 		A::Carry { panel, commit, .. } => {
 			let what = match panel {
@@ -358,7 +358,7 @@ fn render(trace: &[Keyframe], step_s: f64, dur: f64) -> String {
 	// Container px -> canvas units at *one* scale for the whole film, set by the widest container the
 	// trace ever measures. So the largest frame fills the canvas while every other one keeps its true
 	// relative size: a measure into a narrower band visibly shrinks the window rather than
-	// restretching it, which is the whole point of showing the breakpoint math.
+	// restretching it, which is the whole point of showing the band math.
 	let scale = trace.iter().map(|k| (W / k.container.0).min(H / k.container.1)).fold(f64::INFINITY, f64::min);
 	let place = |k: &Keyframe| (scale, PAD + (W - k.container.0 * scale) / 2.0, PAD + (H - k.container.1 * scale) / 2.0);
 

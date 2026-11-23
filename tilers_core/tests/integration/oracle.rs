@@ -155,17 +155,18 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	// band would lie under the host's, and neither would be sure to get the pointer. The rects mirror
 	// the stylesheet's grip geometry. Unframed, nothing lies past the view's edges to keep clear of.
 	let (t, title) = (state.title_h() / 8.0, state.title_h());
-	let (view_right, view_bottom) = (world.size.0, world.scroll + world.size.1);
+	let (view_right, view_bottom) = (world.scroll.0 + world.size.0, world.scroll.1 + world.size.1);
 	for f in &frames {
 		let Some([l, top, w, h]) = rect(&f.style) else { continue };
 		for (grip, style) in &f.grips {
-			let fold = || {
+			let at = |var: &str| {
 				style
-					.trim_start_matches("--tl-fold:")
+					.trim_start_matches(var)
 					.trim_end_matches("px;")
 					.parse::<f64>()
-					.expect("a fold grip carries its --tl-fold")
+					.expect("a wall or fold grip carries where the view's edge is")
 			};
+			let (wall, fold) = (|| at("--tl-wall:"), || at("--tl-fold:"));
 			if !world.framed {
 				if matches!(grip, Grip::Wall | Grip::Fold) {
 					return Err(format!("{:?} has a {grip:?} grip in a view nothing frames", f.gid));
@@ -174,7 +175,7 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 			}
 			let (span, edge) = match grip {
 				Grip::Right => ((l + w - 1.0 - t, l + w - 1.0), view_right),
-				Grip::Wall => ((l + w - 1.0 - 3.0 * t, l + w - 1.0 - 2.0 * t), view_right),
+				Grip::Wall => ((l + wall() - 1.0 - 3.0 * t, l + wall() - 1.0 - 2.0 * t), view_right),
 				Grip::Bottom => ((top + h - 1.0 - t, top + h - 1.0), view_bottom),
 				Grip::Fold => ((top + fold() - 1.0 - 3.0 * t, top + fold() - 1.0 - 2.0 * t), view_bottom),
 				Grip::Left | Grip::Corner => continue,

@@ -17,9 +17,9 @@ use v_utils::fuzz::Frng;
 
 use crate::{actions, oracle};
 
-/// Container widths the fuzzer measures at: both sides of every [`Breakpoint`] boundary, so band
+/// Container widths the fuzzer measures at: both sides of every [`Band`] boundary, so band
 /// transitions are hit exactly rather than by luck, plus a uniform draw in between.
-pub const EDGES: [f64; 8] = [575.0, 576.0, 767.0, 768.0, 991.0, 992.0, 1199.0, 1200.0];
+pub const EDGES: [f64; 4] = [767.0, 768.0, 991.0, 992.0];
 pub const MIN_W: f64 = 320.0;
 pub const MAX_W: f64 = 1920.0;
 pub const MIN_H: f64 = 400.0;
@@ -36,8 +36,8 @@ pub struct World {
 	pub mins: HashMap<PanelId, MinSize>,
 	pub origin: (f64, f64),
 	pub size: (f64, f64),
-	/// The root's scroll offset, as the binding reports it.
-	pub scroll: f64,
+	/// The root's scroll offset, `(left, top)`, as the binding reports it.
+	pub scroll: (f64, f64),
 	/// Whether the view's edges may lie under a host's grips, as the binding measures it.
 	pub framed: bool,
 	pub cursor: (f64, f64),
@@ -81,7 +81,8 @@ impl World {
 	/// Px per grid step at the least row, the same `(width / cols, row_h_rem)` [`PackedState::set_measure`]
 	/// derives — what floors resolve at.
 	pub fn step_px(&self) -> (f64, f64) {
-		(self.size.0 / self.state.cols() as f64, self.cfg.row_h_rem * 16.0) // a native root font is 16px
+		let row = self.cfg.row_h_rem * 16.0; // a native root font is 16px
+		(if self.cfg.scroll_x { row } else { self.size.0 / self.state.cols() as f64 }, row)
 	}
 
 	/// Px per grid step as tiles render, read off a painted frame — the generator needs it to aim a
@@ -99,7 +100,7 @@ impl World {
 		(sw, sh.unwrap_or(least)) // no tile on screen: nothing to aim at, any row will do
 	}
 
-	/// A container resize, through the real breakpoint path. Returns `Err` if a size seen since the
+	/// A container resize, through the real band path. Returns `Err` if a size seen since the
 	/// last structural edit fails to reproduce its arrangement — i.e. resizing away and back left a
 	/// lasting impact, which is invalid — or if a change of height alone moved or resized a tile in the
 	/// grid: height only decides how long a row renders.
@@ -209,7 +210,7 @@ pub fn run(seed: u64, size: usize, verbose: bool, observe: &mut dyn FnMut(Option
 		*w = frng.byte() as u32 % 8;
 	}
 
-	let mut world = seed_world(&mut frng);
+	let mut world = seed_world(&mut frng, seed);
 	if let Err(what) = oracle::check_settled(&world) {
 		return Err(Failure { step: 0, what });
 	}
@@ -244,8 +245,12 @@ pub fn run(seed: u64, size: usize, verbose: bool, observe: &mut dyn FnMut(Option
 /// The seeded world: the first measure arms the band latch, whose miss the [`World::seed_tiles`]
 /// re-seed answers — the same path a band crossing mid-run takes, so a run starts exactly where a
 /// resize would leave it.
-fn seed_world(frng: &mut Frng) -> World {
-	let cfg = Config::default();
+fn seed_world(frng: &mut Frng, seed: u64) -> World {
+	// From the seed, not the buffer, so a run's actions are what they were before the mode existed.
+	let cfg = Config {
+		scroll_x: seed % 3 == 0,
+		..Default::default()
+	};
 	let mut world = World {
 		state: PackedState::new(cfg.clone()),
 		cfg,
@@ -254,7 +259,7 @@ fn seed_world(frng: &mut Frng) -> World {
 		// A non-zero root origin, so a lost `- origin` in the pointer mapping can't pass unnoticed.
 		origin: (17.0, 23.0),
 		size: (0.0, 0.0),
-		scroll: 0.0,
+		scroll: (0.0, 0.0),
 		framed: false,
 		cursor: (0.0, 0.0),
 		band: None,

@@ -15,7 +15,7 @@ use crate::panel::DockPanel;
 /// over the root-scope `Signal<PackedState>` so the host can script tiles, save/load, and read the
 /// live band from *outside* [`PackedArea`]'s subtree. Every method is a `read`/`write` of the one
 /// cell; the reducer does the work.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct PackedApi {
 	state: Signal<PackedState>,
 	panels: Signal<Vec<DockPanel>>,
@@ -76,6 +76,8 @@ impl PackedApi {
 		self.state.write().mint_group_id()
 	}
 
+	/// The grid's column count: the view's, or with [`Config::scroll_x`] a bound far past it, so a
+	/// tile there is placed at its least width rather than a share of this.
 	pub fn cols(&self) -> u32 {
 		self.state.read().cols()
 	}
@@ -142,7 +144,7 @@ impl PackedApi {
 #[component]
 pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<PackedApi>>, config: Option<Config>, actions: Option<Callback<Tile, Element>>) -> Element {
 	let cfg = config.unwrap_or_default();
-	let title_h_rem = cfg.title_h_rem;
+	let (title_h_rem, scroll_x) = (cfg.title_h_rem, cfg.scroll_x);
 	// Root-scope, not this scope: `PackedApi` is driven from outside `PackedArea`'s subtree, so the
 	// cell must outlive this component (this root component never unmounts).
 	let mut state = use_hook(move || Signal::new_in_scope(PackedState::new(cfg), ScopeId::ROOT));
@@ -299,7 +301,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 	rsx! {
 		style { dangerous_inner_html: CSS }
 		div {
-			class: "tl-packed",
+			class: if scroll_x { "tl-packed tl-scroll-x" } else { "tl-packed" },
 			// The stylesheet's one knob for the chrome band; the state resolves the same rem to px.
 			style: "--tl-title-h: {title_h_rem}rem;",
 			onmounted: move |e| {
@@ -319,7 +321,11 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 			},
 			onscroll: move |_| {
 				#[cfg(target_arch = "wasm32")]
-				state.write().set_scroll(root.peek().as_ref().expect("a scroll comes from the mounted root").scroll_top() as f64);
+				{
+					let root = root.peek();
+					let root = root.as_ref().expect("a scroll comes from the mounted root");
+					state.write().set_scroll((root.scroll_left() as f64, root.scroll_top() as f64));
+				}
 			},
 			ondragover: move |e: DragEvent| {
 				if state.peek().carrying() {
@@ -554,7 +560,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 	}
 }
 /// What [`PackedArea`]'s `actions` renders for: one tile, and the handle to act on it.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Tile {
 	pub group: GroupId,
 	/// The panel its strip shows.
