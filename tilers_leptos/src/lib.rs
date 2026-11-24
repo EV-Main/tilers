@@ -10,9 +10,11 @@
 //! style — so a panel's view node survives layout changes while it still tracks its tile. This is
 //! the same property the Dioxus binding gets from keyed diffing, proving one core drives both.
 
+mod lock;
 pub mod panel;
 pub mod view;
 
+pub use lock::{LockScope, LockToggle};
 pub use panel::{DockPanel, PanelView};
 pub use tilers_core::{Band, Config, Group, GroupId, MinSize, PackedGrid, PackedState, PanelId, Step, keys, model};
 pub use view::{PackedApi, PackedArea};

@@ -24,4 +24,4 @@ pub use model::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use state::framed;
-pub use state::{ContentSlot, Declared, Frame, Ghost, Grip, Notice, PackedState};
+pub use state::{ContentSlot, Frame, Ghost, Grip, Notice, PackedState};

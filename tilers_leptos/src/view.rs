@@ -8,9 +8,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use leptos::prelude::*;
-use tilers_core::{Band, CSS, Config, Declared, Group, GroupId, PackedState, PanelId, model::serial::LoadError};
+use tilers_core::{Band, CSS, Config, Group, GroupId, MinSize, PackedState, PanelId, model::serial::LoadError};
 
-use crate::panel::DockPanel;
+use crate::{lock::Scope, panel::DockPanel};
 
 /// Imperative handle over the packed layout, handed to the host via `on_band`: a thin wrapper over
 /// the thread-local `RwSignal<PackedState>` so the host can script tiles, save/load, and read the
@@ -24,9 +24,9 @@ pub struct PackedApi {
 impl PackedApi {
 	/// `group`'s panels must already be in `panels`: their declared mins floor the tile.
 	pub fn place(&self, group: Group, w: u32, h: u32) {
-		let declared = self.panels.with_untracked(|ps| declared(ps));
+		let mins = self.panels.with_untracked(|ps| mins(ps));
 		self.state.update(|s| {
-			s.set_panels(declared);
+			s.set_panels(mins);
 			s.place(group, w, h)
 		});
 	}
@@ -34,9 +34,9 @@ impl PackedApi {
 	/// Open `group` floating above the grid at a wanted `w×h`: centered in the view, on top, focused.
 	/// Its panels must already be in `panels`.
 	pub fn float(&self, group: Group, w: u32, h: u32) {
-		let declared = self.panels.with_untracked(|ps| declared(ps));
+		let mins = self.panels.with_untracked(|ps| mins(ps));
 		self.state.update(|s| {
-			s.set_panels(declared);
+			s.set_panels(mins);
 			s.float(group, w, h)
 		});
 	}
@@ -47,9 +47,9 @@ impl PackedApi {
 	}
 
 	pub fn add_tab(&self, group: GroupId, panel: PanelId) {
-		let declared = self.panels.with_untracked(|ps| declared(ps));
+		let mins = self.panels.with_untracked(|ps| mins(ps));
 		self.state.update(|s| {
-			s.set_panels(declared);
+			s.set_panels(mins);
 			s.add_tab(group, panel)
 		});
 	}
@@ -58,14 +58,14 @@ impl PackedApi {
 	/// `w×h` tile or a tab of the strip it drops on; a panel already hosted moves there. Call it from
 	/// the drag source's `dragstart`. `panel` must already be in `panels`.
 	pub fn carry(&self, panel: PanelId, w: u32, h: u32) {
-		let declared = self.panels.with_untracked(|ps| declared(ps));
+		let mins = self.panels.with_untracked(|ps| mins(ps));
 		self.state.update(|s| {
-			s.set_panels(declared);
+			s.set_panels(mins);
 			s.carry(panel, w, h)
 		});
 	}
 
-	/// Close `panel`'s tab, and its tile with its last one. A locked panel too: the lock holds the user, not the host.
+	/// Close `panel`'s tab, and its tile with its last one. In a locked dock too: the lock holds the user, not the host.
 	pub fn close(&self, panel: &PanelId) {
 		self.state.update(|s| s.close(panel));
 	}
@@ -131,10 +131,10 @@ impl PackedApi {
 
 	/// Every panel the payload hosts must already be in `panels`.
 	pub fn load(&self, json: &str) -> Result<(), LoadError> {
-		let declared = self.panels.with_untracked(|ps| declared(ps));
+		let mins = self.panels.with_untracked(|ps| mins(ps));
 		self.state
 			.try_update(|s| {
-				s.set_panels(declared);
+				s.set_panels(mins);
 				s.load(json)
 			})
 			.expect("state signal alive")
@@ -156,8 +156,8 @@ impl PackedApi {
 ///   [`PackedApi::restored`] says whether it found one; if not, the grid is empty and the host is
 ///   expected to place its tiles (or load its own default) against the now-real step size.
 /// - `on_add`: the header's `+` asks the host to open a tab in that tile; without it there is no `+`.
-///   The rest of a header is the framework's: tabs with their `×`, `?`, float/dock and close; a panel's
-///   [`DockPanel::locked`] hides what would close or move it.
+///   The rest of a header is the framework's: tabs with their `×`, `?`, float/dock and close; the
+///   [`LockScope`](crate::LockScope) it sits in hides what would close, move or add one.
 #[component]
 pub fn PackedArea(
 	panels: RwSignal<Vec<DockPanel>>,
@@ -205,10 +205,16 @@ pub fn PackedArea(
 	#[cfg(not(target_arch = "wasm32"))]
 	let _ = (api, &on_band); // nothing measures without a DOM
 
-	// A panel's declaration is host intent the state re-derives floors and locks from.
+	// A panel's declared min is host intent the state re-derives floors from.
 	Effect::new(move |_| {
-		let declared = panels.with(|ps| declared(ps));
-		state.update(|s| s.set_panels(declared));
+		let mins = panels.with(|ps| mins(ps));
+		state.update(|s| s.set_panels(mins));
+	});
+
+	let scope = use_context::<Scope>();
+	Effect::new(move |_| {
+		let locked = scope.as_ref().is_some_and(Scope::locked);
+		state.update(|s| s.set_locked(locked));
 	});
 
 	// Undo history: snapshot a settled layout after each structural edit. The `wants_undo_snapshot`
@@ -555,8 +561,8 @@ pub fn PackedArea(
 	}
 }
 
-fn declared(panels: &[DockPanel]) -> HashMap<PanelId, Declared> {
-	panels.iter().map(|p| (p.id.clone(), Declared { min: p.min, locked: p.locked })).collect()
+fn mins(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
+	panels.iter().map(|p| (p.id.clone(), p.min)).collect()
 }
 
 /// Panel id → tab label, read from the panels signal (tracks it).
@@ -613,7 +619,7 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 					on:dragenter=move |_| state.update(|s| s.drag_enter_tab(gid, &entered))
 				>
 					{tab.title}
-					{(!tab.locked)
+					{(!locked)
 						.then(|| {
 							view! {
 								<button
@@ -652,11 +658,19 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 					}
 				>
 					{tabs}
-					<div class="tl-actions" on:pointerdown=move |e: web_sys::PointerEvent| e.stop_propagation()>
-						<button class="tl-action" title="Keybinds" on:click=move |_| state.update(|s| s.open_help(gid))>
+					<div
+						class="tl-actions"
+						on:pointerdown=move |e: web_sys::PointerEvent| e.stop_propagation()
+					>
+						<button
+							class="tl-action"
+							title="Keybinds"
+							on:click=move |_| state.update(|s| s.open_help(gid))
+						>
 							"?"
 						</button>
 						{on_add
+							.filter(|_| !locked)
 							.map(|add| {
 								view! {
 									<button class="tl-action" title="Add a tab" on:click=move |_| add(gid)>
@@ -674,7 +688,11 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 									>
 										{if floating { "⊟" } else { "⧉" }}
 									</button>
-									<button class="tl-action" title="Close" on:click=move |_| state.update(|s| s.close_tile(gid))>
+									<button
+										class="tl-action"
+										title="Close"
+										on:click=move |_| state.update(|s| s.close_tile(gid))
+									>
 										"✕"
 									</button>
 								}
@@ -726,8 +744,8 @@ fn measure(el: web_sys::Element, state: RwSignal<PackedState, LocalStorage>, api
 		if let Some(cb) = on_band {
 			cb(api);
 		}
-		let declared = api.panels.with_untracked(|ps| declared(ps));
-		state.update(|s| s.set_panels(declared));
+		let mins = api.panels.with_untracked(|ps| mins(ps));
+		state.update(|s| s.set_panels(mins));
 	}
 }
 

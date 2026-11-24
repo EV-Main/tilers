@@ -1,7 +1,7 @@
 //! A native drag carrying a host's panel ([`PackedState::carry`]) lands where it is dropped, through
 //! the same targeting a tile drag uses; one that never drops leaves the layout as it was.
 
-use tilers_core::{Config, Declared, Group, MinSize, PackedState, PanelId};
+use tilers_core::{Config, Group, MinSize, PackedState, PanelId};
 
 const WIDTH: f64 = 1600.0;
 
@@ -12,20 +12,7 @@ fn id(s: &str) -> PanelId {
 /// Two half-width tiles side by side; `new` is declared but not hosted.
 fn seeded() -> PackedState {
 	let mut s = PackedState::new(Config::default());
-	s.set_panels(
-		["a", "b", "new"]
-			.into_iter()
-			.map(|p| {
-				(
-					id(p),
-					Declared {
-						min: MinSize::Px { w: 0.0, h: 0.0 },
-						locked: false,
-					},
-				)
-			})
-			.collect(),
-	);
+	s.set_panels(["a", "b", "new"].into_iter().map(|p| (id(p), MinSize::Px { w: 0.0, h: 0.0 })).collect());
 	s.set_measure((0.0, 0.0), (WIDTH, 900.0), false);
 	assert_eq!(s.take_band(), Some(false), "first measure is a miss natively");
 	for p in ["a", "b"] {

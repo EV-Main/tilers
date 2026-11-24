@@ -8,7 +8,7 @@
 //! placed in the order ticket ripples through Positions, Balances, Orders, Trades and Console at
 //! once. Tiles pack left-to-right; the top-bar `+` spawns a random window and `⧉` opens one floating,
 //! each tile's `+` opens the catalog as a new tab, the host's own header buttons maximize and collapse
-//! beside the framework's, the console is locked, and the grip resizes in `STEP` increments.
+//! beside the framework's, the top bar's lock holds the board, and the grip resizes in `STEP` increments.
 #![feature(default_field_values)]
 #![expect(clippy::useless_format, reason = "rsx! expands an attribute's `\"{x}\"` through `format!`")]
 
@@ -29,7 +29,7 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use market::{Market, xorshift};
-use tilers_dioxus::{Config, DockPanel, Group, GroupId, MinSize, PackedApi, PackedArea, PanelId, Step, Tile};
+use tilers_dioxus::{Config, DockPanel, Group, GroupId, LockScope, LockToggle, MinSize, PackedApi, PackedArea, PanelId, Step, Tile};
 
 /// The catalog of insilico-style windows. Each declares its title, default size, and a per-type
 /// [`MinSize`] (in whichever unit reads naturally).
@@ -124,14 +124,13 @@ fn kind_from_id(id: &str) -> Option<Kind> {
 	Kind::ALL.into_iter().find(|k| k.id() == prefix)
 }
 
-/// A panel's content for `kind` under a given id. The console is locked: always on the board.
+/// A panel's content for `kind` under a given id.
 fn panel_of(kind: Kind, id: PanelId) -> DockPanel {
 	DockPanel {
 		id,
 		title: kind.title().into(),
 		content: rsx! { KindView { kind } },
 		min: kind.min(),
-		locked: kind == Kind::Console,
 		..
 	}
 }
@@ -224,6 +223,7 @@ fn app() -> Element {
 	let mut market = use_context_provider(|| Signal::new(Market::new()));
 	let mut api = use_context_provider(|| Signal::new(None::<PackedApi>));
 	let pending = use_signal(|| None::<GroupId>);
+	let locked = use_signal(|| false);
 
 	use_future(move || async move {
 		loop {
@@ -265,40 +265,43 @@ fn app() -> Element {
 	};
 
 	rsx! {
-		div { style: "position:fixed; inset:0; display:flex; flex-direction:column; background:#0b0f0e;",
-			div {
-				style: "flex:0 0 auto; height:44px; display:flex; align-items:center; gap:14px;
-					padding:0 14px; background:#0f1b18; border-bottom:2px solid #63e9cd;",
-				span { style: "color:#63e9cd; font:700 15px system-ui;", "InSilico" }
-				button {
-					style: "cursor:pointer; border:1px solid #63e9cd; background:transparent; color:#63e9cd;
-						width:26px; height:26px; border-radius:4px; font:600 16px system-ui; line-height:1;",
-					title: "Add a random window",
-					onclick: add_random,
-					"+"
+		LockScope { locked,
+			div { style: "position:fixed; inset:0; display:flex; flex-direction:column; background:#0b0f0e;",
+				div {
+					style: "flex:0 0 auto; height:44px; display:flex; align-items:center; gap:14px;
+						padding:0 14px; background:#0f1b18; border-bottom:2px solid #63e9cd;",
+					span { style: "color:#63e9cd; font:700 15px system-ui;", "InSilico" }
+					button {
+						style: "cursor:pointer; border:1px solid #63e9cd; background:transparent; color:#63e9cd;
+							width:26px; height:26px; border-radius:4px; font:600 16px system-ui; line-height:1;",
+						title: "Add a random window",
+						onclick: add_random,
+						"+"
+					}
+					button {
+						style: "cursor:pointer; border:1px solid #63e9cd; background:transparent; color:#63e9cd;
+							width:26px; height:26px; border-radius:4px; font:600 14px system-ui; line-height:1;",
+						title: "Open a floating window",
+						onclick: float_news,
+						"⧉"
+					}
+					LockToggle {}
 				}
-				button {
-					style: "cursor:pointer; border:1px solid #63e9cd; background:transparent; color:#63e9cd;
-						width:26px; height:26px; border-radius:4px; font:600 14px system-ui; line-height:1;",
-					title: "Open a floating window",
-					onclick: float_news,
-					"⧉"
+				div { style: "flex:1 1 auto; position:relative;",
+					PackedArea {
+						panels,
+						on_band: Some(on_band),
+						config: Some(insilico_config(api)),
+						actions: Some(tile_actions()),
+						on_add: Some(Callback::new(move |g| {
+							let mut pending = pending;
+							pending.set(Some(g));
+						})),
+					}
 				}
-			}
-			div { style: "flex:1 1 auto; position:relative;",
-				PackedArea {
-					panels,
-					on_band: Some(on_band),
-					config: Some(insilico_config(api)),
-					actions: Some(tile_actions()),
-					on_add: Some(Callback::new(move |g| {
-						let mut pending = pending;
-						pending.set(Some(g));
-					})),
+				if let Some(gid) = pending() {
+					CatalogPopup { gid, panels, counter, api, pending }
 				}
-			}
-			if let Some(gid) = pending() {
-				CatalogPopup { gid, panels, counter, api, pending }
 			}
 		}
 	}

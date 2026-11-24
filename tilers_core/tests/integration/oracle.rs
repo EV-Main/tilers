@@ -40,7 +40,7 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 	for c in &grid.cells {
 		// The px each tab needs of the whole tile; the floor is the fewest steps holding all of them.
 		let (need_w, need_h) = c.group.tabs.iter().fold((0.0_f64, 0.0_f64), |(w, h), p| {
-			let (pw, ph) = match world.panels[p].min {
+			let (pw, ph) = match world.panels[p] {
 				MinSize::Steps { w, h } => (w.0 as f64 * sw, h.0 as f64 * sh),
 				MinSize::Rem { w, h } => (w * rem_px, h * rem_px + title_h),
 				MinSize::Px { w, h } => (w, h + title_h),
@@ -222,6 +222,13 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 		if !inside(l, w, world.size.0) || !inside(t, h, world.size.1) {
 			return Err(format!("float {:?} at {:?} leaves the {:?} view", f.gid, [l, t, w, h], world.size));
 		}
+	}
+
+	if let Some(f) = frames.iter().find(|f| f.locked != (world.locked && !f.shadow)) {
+		return Err(format!("{:?} renders locked: {}, in a dock locked: {}", f.gid, f.locked, world.locked));
+	}
+	if world.locked && state.ghost(&titles).is_some() {
+		return Err("a locked dock let a drag arm".to_string());
 	}
 
 	// The ghost exists exactly while the drag is armed, so it is the public witness of arming; an

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use tilers_core::{
-	Config, Declared, Grip, Group, GroupId, PackedState, PanelId, Step,
+	Config, Grip, Group, GroupId, PackedState, PanelId, Step,
 	keys::{Binding, Builtin, Chord, Command, Help, Hint, KeyInput, Node},
 	model::packed::{Cell, DragSource, DropTarget, MinSize, PackedGrid},
 };
@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Action kinds, in the order their swarm weights are drawn.
-pub const N_KINDS: usize = 14;
+pub const N_KINDS: usize = 15;
 /// Height of the tile chrome: `Config::title_h_rem`'s default resolved against the 16px root font a
 /// non-DOM target assumes. Mirrored here only to aim at headers and to re-run the pure
 /// `resolve_target` for the coverage tally.
@@ -44,6 +44,7 @@ const DRAG_ENTER_TAB: usize = 10;
 const CARRY: usize = 11;
 const FLOAT: usize = 12;
 const TOGGLE: usize = 13;
+const LOCK: usize = 14;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -57,14 +58,12 @@ pub enum Action {
 		w: u32,
 		h: u32,
 		min: MinSize,
-		locked: bool,
 	},
 	/// A host opening a panel straight into the float layer.
 	Float {
 		w: u32,
 		h: u32,
 		min: MinSize,
-		locked: bool,
 	},
 	/// A host floating a tile out, or docking a float.
 	Toggle {
@@ -109,8 +108,9 @@ pub enum Action {
 	SetMins {
 		panel: PanelId,
 		min: MinSize,
-		locked: bool,
 	},
+	/// The scope over the dock locking or unlocking it.
+	Lock,
 	/// A native drag entering a tab, which may have closed or moved since the event was queued.
 	DragEnterTab {
 		group: GroupId,
@@ -124,6 +124,47 @@ pub enum Action {
 		out: Option<usize>,
 		commit: bool,
 	},
+}
+
+impl Action {
+	/// Whether this, done to a locked dock showing `before`, left what the lock holds: which tiles exist and
+	/// where they are. What reshapes a tile keeps its group; the rest only open tabs. The host's actions are free.
+	pub fn kept(&self, before: &PackedGrid, after: &PackedGrid, resizing: bool) -> bool {
+		let groups = |g: &PackedGrid| {
+			let tiles = g.cells.iter().map(|c| (c.group.id, (false, c.group.tabs.clone())));
+			tiles.chain(g.floats.iter().map(|f| (f.group.id, (true, f.group.tabs.clone())))).collect::<HashMap<_, _>>()
+		};
+		let shape = |g: &PackedGrid| {
+			let mut g = g.clone();
+			g.cells
+				.iter_mut()
+				.map(|c| &mut c.group)
+				.chain(g.floats.iter_mut().map(|f| &mut f.group))
+				.for_each(|g| g.active = 0);
+			g
+		};
+		let opened = |g: &PackedGrid| g.cells.iter().filter(|c| c.collapsed.is_none()).count();
+		match self {
+			Action::Measure { .. } | Action::Place { .. } | Action::Float { .. } | Action::Toggle { .. } | Action::AddTab { .. } | Action::SetMins { .. } => true,
+			Action::Resize { .. }
+			| Action::Key {
+				aim: Aim::Builtin(Builtin::Collapse),
+				..
+			} => groups(before) == groups(after),
+			// a click on a spine opens it
+			Action::Drag { .. } if opened(after) == opened(before) + 1 => groups(before) == groups(after),
+			// a key mid-resize is checked by moving the grip on
+			Action::Key { .. } if resizing => groups(before) == groups(after),
+			Action::Key { .. }
+			| Action::Drag { .. }
+			| Action::Carry { .. }
+			| Action::DragEnterTab { .. }
+			| Action::Focus { .. }
+			| Action::SaveLoad
+			| Action::Scroll { .. }
+			| Action::Lock => shape(before) == shape(after),
+		}
+	}
 }
 
 #[derive(Clone, Debug)]
@@ -157,16 +198,16 @@ pub fn noisy(inputs: &[KeyInput]) -> bool {
 pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	match action {
 		Action::Measure { w, h, framed } => return world.measure(*w, *h, *framed),
-		Action::Place { w, h, min, locked } => {
+		Action::Place { w, h, min } => {
 			world.structural_edit();
 			let gid = world.state.mint_group_id();
-			let panel = world.mint_panel(*min, *locked);
+			let panel = world.mint_panel(*min);
 			world.state.place(Group::new(gid, panel), *w, *h);
 		}
-		Action::Float { w, h, min, locked } => {
+		Action::Float { w, h, min } => {
 			world.structural_edit();
 			let gid = world.state.mint_group_id();
-			let panel = world.mint_panel(*min, *locked);
+			let panel = world.mint_panel(*min);
 			let cells = world.state.grid().cells.clone();
 			world.state.float(Group::new(gid, panel), *w, *h);
 			if world.state.grid().cells != cells {
@@ -185,7 +226,7 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 		}
 		Action::AddTab { group, min } => {
 			world.structural_edit();
-			let panel = world.mint_panel(*min, false);
+			let panel = world.mint_panel(*min);
 			world.state.add_tab(*group, panel);
 		}
 		Action::Focus { group } => world.state.focus(*group),
@@ -252,10 +293,18 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 		}
 		Action::Key { inputs, aim } => return key(inputs, *aim, world),
 		Action::SaveLoad => return save_load(world),
-		Action::SetMins { panel, min, locked } => {
+		Action::SetMins { panel, min } => {
 			world.structural_edit();
-			world.panels.insert(panel.clone(), Declared { min: *min, locked: *locked });
+			world.panels.insert(panel.clone(), *min);
 			world.state.set_panels(world.panels.clone());
+		}
+		Action::Lock => {
+			world.locked = !world.locked;
+			let before = world.state.grid().clone();
+			world.state.set_locked(world.locked);
+			if world.state.grid() != &before {
+				return Err("locking or unlocking changed the layout".to_string());
+			}
 		}
 		Action::Scroll { at } => {
 			world.scroll = *at;
@@ -293,7 +342,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 	let cells = &world.state.grid().cells;
 	let groups = groups(world);
 
-	let mut avail = vec![MEASURE, PLACE, FLOAT, KEY, SCROLL];
+	let mut avail = vec![MEASURE, PLACE, FLOAT, KEY, SCROLL, LOCK];
 	// A carry is a gesture: it waits for a resize left in flight to end, as `carry` does.
 	if world.state.resizing().is_none() {
 		avail.push(CARRY);
@@ -337,22 +386,12 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			// Sized as a fraction of what shows, so a tile stays a pane rather than a sliver.
 			let w = 1 + frng.below(world.state.cols().div_euclid(2));
 			let h = 1 + frng.below(world.state.rows().div_euclid(2));
-			Action::Place {
-				w,
-				h,
-				min: min(frng, w, h),
-				locked: frng.below(8) == 0,
-			}
+			Action::Place { w, h, min: min(frng, w, h) }
 		}
 		FLOAT => {
 			let w = 1 + frng.below(world.state.cols().min(64).div_euclid(2));
 			let h = 1 + frng.below(world.state.rows().div_euclid(2));
-			Action::Float {
-				w,
-				h,
-				min: min(frng, w, h),
-				locked: frng.below(8) == 0,
-			}
+			Action::Float { w, h, min: min(frng, w, h) }
 		}
 		TOGGLE => Action::Toggle { group: pick_group(frng, world) },
 		ADD_TAB => Action::AddTab {
@@ -459,6 +498,7 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			Action::Key { inputs, aim }
 		}
 		SAVE_LOAD => Action::SaveLoad,
+		LOCK => Action::Lock,
 		SCROLL => {
 			// Anywhere the content reaches, as a browser clamps it.
 			let bottom = cells.iter().map(|c| c.y + c.h).max().unwrap_or(0) as f64 * sh;
@@ -475,7 +515,6 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		SET_MINS => {
 			let (g, _) = &groups[frng.below(groups.len() as u32) as usize];
 			Action::SetMins {
-				locked: frng.below(8) == 0,
 				panel: g.tabs[frng.below(g.tabs.len() as u32) as usize].clone(),
 				// Drawn against the whole band, not the tile — a floor wider than what's left of the row
 				// is the case only a re-floor can reach, and the one that must clamp rather than spill.
@@ -630,7 +669,7 @@ fn min(frng: &mut Frng, w: u32, h: u32) -> MinSize {
 fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	let panel = match panel {
 		Carried::New { w, h, min } => {
-			let id = world.mint_panel(*min, false);
+			let id = world.mint_panel(*min);
 			world.state.carry(id.clone(), *w, *h);
 			id
 		}
@@ -665,6 +704,7 @@ fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool,
 	}
 	world.structural_edit();
 	world.state.drag_release();
+	inside &= !world.locked; // a locked dock takes no carry
 	let g = world.state.grid();
 	let hosts = g
 		.cells

@@ -9,9 +9,11 @@
 //! and leave whitespace below (InsilicoTerminal's look). Panel content lives in a flat, id-keyed
 //! content overlay so component instances (and their JS state) survive layout restructuring.
 
+mod lock;
 pub mod panel;
 pub mod view;
 
+pub use lock::{LockScope, LockToggle};
 pub use panel::DockPanel;
 pub use tilers_core::{Band, Config, Group, GroupId, MinSize, PackedGrid, PackedState, PanelId, Step, keys, model};
 pub use view::{PackedApi, PackedArea, Tile};

@@ -55,7 +55,7 @@ const C_FG: &str = "#ddd";
 /// `--tl-shadow-bg` is `rgba(160,160,160,0.18)`; flattened over the tile bg so the landing cell is
 /// legible at film scale.
 const C_SHADOW: &str = "#3d3d3d";
-const BUCKETS: [&str; 38] = [
+const BUCKETS: [&str; 39] = [
 	"Measure",
 	"Place",
 	"AddTab",
@@ -94,6 +94,7 @@ const BUCKETS: [&str; 38] = [
 	"Toggle",
 	"key Collapse",
 	"key Float",
+	"Lock",
 ];
 /// Every flag also reads a `FILM_*` variable, so the film is scriptable from an env without a
 /// second code path; clap's precedence puts the flag first.
@@ -204,6 +205,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 			A::Carry { .. } => 33,
 			A::Float { .. } => 34,
 			A::Toggle { .. } => 35,
+			A::Lock => 38,
 		};
 	if let A::Drag { grab, commit, .. } = action {
 		m |= 1 << if world.resolved.is_empty() { 10 } else { 9 };
@@ -256,8 +258,8 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 	use actions::{Action as A, Grab};
 	match action {
 		A::Measure { w, h, framed } => format!("Measure {w:.0}x{h:.0}{}", if *framed { " framed" } else { "" }),
-		A::Place { w, h, min, locked } => format!("Place {w}x{h} min={}{}", min_label(min), if *locked { " locked" } else { "" }),
-		A::Float { w, h, min, locked } => format!("Float {w}x{h} min={}{}", min_label(min), if *locked { " locked" } else { "" }),
+		A::Place { w, h, min } => format!("Place {w}x{h} min={}", min_label(min)),
+		A::Float { w, h, min } => format!("Float {w}x{h} min={}", min_label(min)),
 		A::Toggle { group } => format!("Toggle float g{}", group.0),
 		A::AddTab { group, .. } => format!("AddTab into g{}", group.0),
 		A::Focus { group } => format!("Focus g{}", group.0),
@@ -277,7 +279,8 @@ fn summary(action: &actions::Action, world: &sim::World) -> String {
 		A::Resize { group, commit, .. } => format!("Resize g{}{}", group.0, if *commit { "" } else { " [still held]" }),
 		A::Key { inputs, aim } => format!("Key {aim:?}{}", if actions::noisy(inputs) { " [noisy]" } else { "" }),
 		A::SaveLoad => "SaveLoad".to_string(),
-		A::SetMins { panel, min, locked } => format!("SetMins {} = {}{}", panel.0, min_label(min), if *locked { " locked" } else { "" }),
+		A::Lock => if world.locked { "Lock" } else { "Unlock" }.to_string(),
+		A::SetMins { panel, min } => format!("SetMins {} = {}", panel.0, min_label(min)),
 		A::Scroll { at: (x, y) } => format!("Scroll to {x:.0},{y:.0}px"),
 		A::DragEnterTab { group, panel } => format!("DragEnterTab {} in g{}", panel.0, group.0),
 		A::Carry { panel, commit, .. } => {

@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test'
 
 // A tile's header is the framework's: its tabs with their `×`, then the host's own buttons, then `? + ⧉ ✕`.
-// The host adds; it never replaces or hides. A locked panel (insilico's console) hides what would close
-// or move it.
+// The host adds; it never replaces or hides. A locked scope (insilico's top-bar lock) hides what would
+// close, move or add a tile.
 
 test.beforeEach(async ({ page }) => {
 	await page.goto('/')
@@ -35,11 +35,14 @@ test("a tab's × closes that tab alone, the header's ✕ the whole tile", async 
 	await expect(page.locator('.tl-tile')).toHaveCount(count - 1)
 })
 
-test('a locked panel shows no close, float or drag, and stays put', async ({ page }) => {
+test('a locked dock shows no close, float, add or drag, and stays put until unlocked', async ({ page }) => {
+	const lock = page.locator('.tl-lock')
+	await expect(lock).toHaveAttribute('aria-pressed', 'false')
+	await lock.click()
+	await expect(lock).toHaveAttribute('aria-pressed', 'true')
+	await expect(page.locator('.tl-tab-close')).toHaveCount(0)
+	for (const title of ['Float', 'Close', 'Add a tab']) await expect(page.locator(`.tl-actions [title="${title}"]`)).toHaveCount(0)
 	const tile = tileOf(page, 'console')
-	await expect(tile.locator('.tl-tab-close')).toHaveCount(0)
-	await expect(tile.locator('.tl-actions [title="Float"]')).toHaveCount(0)
-	await expect(tile.locator('.tl-actions [title="Close"]')).toHaveCount(0)
 	await expect(tile.locator('.tl-actions [title="Keybinds"]'), 'the rest of the header stays').toHaveCount(1)
 	const before = await tile.boundingBox()
 	const header = await tile.locator('.tl-header').boundingBox()
@@ -49,6 +52,9 @@ test('a locked panel shows no close, float or drag, and stays put', async ({ pag
 	await expect(page.locator('.tl-ghost')).toHaveCount(0)
 	await page.mouse.up()
 	expect(await tile.boundingBox()).toEqual(before)
+
+	await lock.click()
+	await expect(tile.locator('.tl-actions [title="Close"]')).toHaveCount(1)
 })
 
 test('a collapsed tile is a spine as wide as the title bar is tall, and a click opens it', async ({ page }) => {

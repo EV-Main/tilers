@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use tilers_core::{
-	Config, Declared, Group, GroupId, MinSize, PackedState, PanelId,
+	Config, Group, GroupId, MinSize, PackedState, PanelId,
 	keys::KeyInput,
 	model::{packed::Floating, serial},
 };
@@ -21,20 +21,7 @@ fn id(s: &str) -> PanelId {
 /// Two half-width tiles side by side, `a` then `b`; `c` is declared but not hosted.
 fn seeded() -> (PackedState, GroupId, GroupId) {
 	let mut s = PackedState::new(Config::default());
-	s.set_panels(
-		["a", "b", "c"]
-			.into_iter()
-			.map(|p| {
-				(
-					id(p),
-					Declared {
-						min: MinSize::Px { w: 0.0, h: 0.0 },
-						locked: false,
-					},
-				)
-			})
-			.collect(),
-	);
+	s.set_panels(["a", "b", "c"].into_iter().map(|p| (id(p), MinSize::Px { w: 0.0, h: 0.0 })).collect());
 	s.set_measure((0.0, 0.0), (WIDTH, 900.0), false);
 	assert_eq!(s.take_band(), Some(false), "first measure is a miss natively");
 	let gids = ["a", "b"].map(|p| {
@@ -96,20 +83,7 @@ fn opening_a_float_leaves_the_grid_be() {
 	let f = float(&s, c);
 	assert_eq!((f.x, f.y), (22, 9), "centered in the 64x28-step view");
 	let d = s.mint_group_id();
-	s.set_panels(
-		["a", "b", "c", "d"]
-			.into_iter()
-			.map(|p| {
-				(
-					id(p),
-					Declared {
-						min: MinSize::Px { w: 0.0, h: 0.0 },
-						locked: false,
-					},
-				)
-			})
-			.collect(),
-	);
+	s.set_panels(["a", "b", "c", "d"].into_iter().map(|p| (id(p), MinSize::Px { w: 0.0, h: 0.0 })).collect());
 	s.float(Group::new(d, id("d")), 20, 10);
 	assert_eq!((float(&s, d).x, float(&s, d).y), (23, 10), "a step past the one already there");
 	assert_eq!(s.frames(&HashMap::new()).last().map(|f| f.gid), Some(d), "the newest is on top");

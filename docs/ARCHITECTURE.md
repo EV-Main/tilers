@@ -63,8 +63,11 @@ handle over that cell — to the host through `on_band`.
 A tile's chrome is the framework's: the binding renders the strip and owns its gestures (the empty
 area moves the tile, a tab drags out or joins) and its management (a tab's `×`, `?`, `+`, float/dock,
 close). A host fills in content — a panel's tab label — and may *add* buttons before the framework's
-(`actions`); it takes management away only through a panel's `locked`. A press on a control inside a
+(`actions`); it takes management away only through a lock scope. A press on a control inside a
 label or an added button is the control's.
+A lock scope (`LockScope`) is an area of the host's page with one switch (`LockToggle`), which the host
+places; the lock itself is the dock's, `PackedState::locked`, and the binding pushes the nearest scope's
+effective value (its own, or any outer scope's) into it. A dock in no scope is never locked.
 Tile drags are the reducer's own pointer gestures; a native drag (a host's card, a file) only opens
 a tab it enters (`drag_enter_tab`), and the drop stays the content's — unless the host declared it a
 carry (`carry`): then its `dragover`s drive the same `drag_move` → `resolve_target` → preview `drop`
@@ -122,9 +125,9 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   view at its press. Its frame and content are sticky boxes in layers as large as the scrolled content,
   so it stays put as the grid scrolls, and its content is the same overlay node it was as a tile.
   Docking is the one `drop`, from where it shows. Its stacking order is overlay state (`stack`), not layout.
-- A panel's `locked` gates the user, never the host: no gesture or key closes it, moves its group, tears
-  its tab out or floats/docks it; resizing, collapsing, maximizing and joining stay open, and every
-  `PackedApi` call still acts.
+- A dock's lock gates the user, never the host: no gesture, key or header button changes which tiles
+  exist or where they are — no move, tear, close, float/dock, `+`, undo/redo or carry landing; resizing,
+  collapsing, maximizing and opening a tab stay open, and every `PackedApi` call still acts.
 - `focused`/`maximized` are overlay state beside the grid, never cells; they are filtered
   through `live()` so a stale id is inert. `drag`/`resize` address cells, so anything that
   replaces them (`reset`, and hence the band latch, and `load`) must clear them too.

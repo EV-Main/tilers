@@ -4,7 +4,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use tilers_core::{
-	Config, Declared, Grip, Group, GroupId, MinSize, PackedState, PanelId, Step,
+	Config, Grip, Group, GroupId, MinSize, PackedState, PanelId, Step,
 	keys::{Binding, Chord, Command, HelpRow, KeyInput, KeyOutcome, Keymap, Node},
 	model::packed::PackedGrid,
 };
@@ -53,7 +53,7 @@ fn edited(cfg: Config) -> (PackedState, PackedGrid) {
 fn seeded(cfg: Config) -> PackedState {
 	let mut s = PackedState::new(cfg);
 	let min = MinSize::Steps { w: Step(1), h: Step(1) };
-	s.set_panels((0..2).map(|i| (PanelId(format!("p{i}")), Declared { min, locked: false })).collect());
+	s.set_panels((0..2).map(|i| (PanelId(format!("p{i}")), min)).collect());
 	s.set_measure((0.0, 0.0), (1600.0, 900.0), false);
 	assert_eq!(s.take_band(), Some(false), "first measure is a miss natively");
 	for i in 0..2 {

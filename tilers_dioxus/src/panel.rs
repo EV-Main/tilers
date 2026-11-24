@@ -27,7 +27,4 @@ pub struct DockPanel {
 	/// What the content needs to stay legible; every tile hosting it is floored to fit.
 	pub min: MinSize,
 	pub label: Option<Element> = None,
-	/// The user can't close it or move it elsewhere: its tab has no `×`, its tile no close, float or
-	/// dock, and neither drags. Resizing, collapsing, maximizing and others joining its tile stay open.
-	pub locked: bool = false,
 }

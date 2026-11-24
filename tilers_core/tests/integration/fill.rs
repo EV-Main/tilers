@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tilers_core::{Config, Declared, Grip, Group, GroupId, MinSize, PackedState, PanelId};
+use tilers_core::{Config, Grip, Group, GroupId, MinSize, PackedState, PanelId};
 
 const ORIGIN: (f64, f64) = (0.0, 0.0);
 const WIDTH: f64 = 1600.0;
@@ -42,20 +42,7 @@ fn columns(n: usize, width: f64) -> PackedState {
 		..Default::default()
 	});
 	let panels: Vec<PanelId> = (0..n).map(|i| PanelId(format!("col{i}"))).collect();
-	state.set_panels(
-		panels
-			.iter()
-			.map(|p| {
-				(
-					p.clone(),
-					Declared {
-						min: MinSize::Px { w: 248.0, h: 0.0 },
-						locked: false,
-					},
-				)
-			})
-			.collect(),
-	);
+	state.set_panels(panels.iter().map(|p| (p.clone(), MinSize::Px { w: 248.0, h: 0.0 })).collect());
 	state.set_measure(ORIGIN, (width, HEIGHT), false);
 	assert_eq!(state.take_band(), Some(false), "first measure is a miss natively");
 	let rows = state.rows();
@@ -72,20 +59,7 @@ fn bottom(state: &PackedState) -> f64 {
 fn seeded(sizes: &[(u32, u32)]) -> PackedState {
 	let mut state = PackedState::new(Config::default());
 	let panels: Vec<PanelId> = (0..sizes.len()).map(|i| PanelId(format!("p{i}"))).collect();
-	state.set_panels(
-		panels
-			.iter()
-			.map(|p| {
-				(
-					p.clone(),
-					Declared {
-						min: MinSize::Px { w: 0.0, h: 0.0 },
-						locked: false,
-					},
-				)
-			})
-			.collect(),
-	);
+	state.set_panels(panels.iter().map(|p| (p.clone(), MinSize::Px { w: 0.0, h: 0.0 })).collect());
 	state.set_measure(ORIGIN, (WIDTH, HEIGHT), false);
 	assert_eq!(state.take_band(), Some(false), "first measure is a miss natively");
 	for (i, (p, &(w, h))) in panels.into_iter().zip(sizes).enumerate() {
@@ -137,20 +111,7 @@ fn rows_hold_still_under_a_resize_and_fill_after_it() {
 #[test]
 fn a_layout_spans_every_width_its_band_covers() {
 	let mut state = PackedState::new(Config::default());
-	state.set_panels(
-		[("a", 0.0), ("b", 0.0)]
-			.into_iter()
-			.map(|(p, w)| {
-				(
-					PanelId(p.into()),
-					Declared {
-						min: MinSize::Px { w, h: 0.0 },
-						locked: false,
-					},
-				)
-			})
-			.collect(),
-	);
+	state.set_panels([("a", 0.0), ("b", 0.0)].into_iter().map(|(p, w)| (PanelId(p.into()), MinSize::Px { w, h: 0.0 })).collect());
 	state.set_measure(ORIGIN, (1000.0, HEIGHT), false);
 	assert_eq!(state.take_band(), Some(false), "first measure is a miss natively");
 	let half = state.cols().div_euclid(2);

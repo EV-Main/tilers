@@ -52,9 +52,11 @@ pub struct PackedState {
 	/// The document's actual root font size, re-read at every measure. Bridges rem ⇄ px for the
 	/// chrome height and a rem-expressed [`MinSize`].
 	rem_px: f64,
-	/// Every panel's declaration, mirrored from the binding's panel list. Host intent, not layout:
+	/// Every panel's declared min, mirrored from the binding's panel list. Host intent, not layout:
 	/// floors are re-derived from it ([`refloor`](Self::refloor)) whenever the step or a tile's tabs change.
-	panels: HashMap<PanelId, Declared>,
+	panels: HashMap<PanelId, MinSize>,
+	/// The user can't change which tiles exist or where they are; the host can.
+	locked: bool,
 	band: Band,
 	drag: Option<Drag>,
 	resize: Option<ResizeStart>,
@@ -107,6 +109,7 @@ impl PackedState {
 			step_px: (0.0, 0.0),
 			rem_px: REM_PX,
 			panels: HashMap::new(),
+			locked: false,
 			band: Band::default(),
 			drag: None,
 			resize: None,
@@ -287,16 +290,6 @@ impl PackedState {
 		self.grid.cells.iter().map(|c| &c.group).chain(self.grid.floats.iter().map(|f| &f.group)).find(|g| g.id == gid)
 	}
 
-	/// Whether any of `tabs` is [`Declared::locked`].
-	fn locked(&self, tabs: &[PanelId]) -> bool {
-		tabs.iter().any(|p| {
-			self.panels
-				.get(p)
-				.unwrap_or_else(|| panic!("hosted panel {p:?} is undeclared: the binding's panels list every panel the layout hosts"))
-				.locked
-		})
-	}
-
 	/// Toggle `group` between its tile and a spine: the tile narrows to the spine, keeping the width it
 	/// opens back to, and opening grows it back, pushing what it reaches as a grip would.
 	pub fn collapse(&mut self, group: GroupId) {
@@ -389,10 +382,19 @@ impl PackedState {
 		self.grid.state = GridState::Resizing;
 	}
 
-	/// Replace every panel's declaration — the binding mirrors its panel list here on each change.
-	pub fn set_panels(&mut self, panels: HashMap<PanelId, Declared>) {
+	/// Replace every panel's declared min — the binding mirrors its panel list here on each change.
+	pub fn set_panels(&mut self, panels: HashMap<PanelId, MinSize>) {
 		self.panels = panels;
 		self.refloor();
+	}
+
+	/// Whether the dock's lock scope holds it — the binding mirrors the nearest one here on each change.
+	/// A drag in flight as it locks lands nowhere.
+	pub fn set_locked(&mut self, locked: bool) {
+		self.locked = locked;
+		if locked {
+			self.drag_cancel();
+		}
 	}
 
 	/// The floor a tile hosting `tabs` gets at `step`: the max of their resolved mins. A placement and a
@@ -403,7 +405,6 @@ impl PackedState {
 				self.panels
 					.get(p)
 					.unwrap_or_else(|| panic!("hosted panel {p:?} is undeclared: the binding's panels list every panel the layout hosts"))
-					.min
 					.resolve(sw, sh, self.rem_px, self.title_h())
 			})
 			.fold((0, 0), |(w, h), (pw, ph)| (w.max(pw), h.max(ph)))
@@ -597,7 +598,7 @@ impl PackedState {
 	/// every band change. `true` ⇒ this band's cached layout was restored from `localStorage`;
 	/// `false` ⇒ nothing usable was cached and the grid has been reset — the host must place its
 	/// tiles (or load its own default). Called by the binding after every measure; it then invokes
-	/// the host's `on_band` hook, and only then [`set_mins`](Self::set_mins): a restored layout may
+	/// the host's `on_band` hook, and only then [`set_panels`](Self::set_panels): a restored layout may
 	/// host panels the host only lists once `on_band` has rebuilt them, so its floors wait for that.
 	pub fn take_band(&mut self) -> Option<bool> {
 		let band = self.band();
@@ -637,8 +638,8 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(gid);
-		if self.locked(&self.group(gid).expect("press_tile: group exists").tabs) {
-			return; // a locked tile stays where it is
+		if self.locked && !self.spined(gid) {
+			return; // its release would be a click, which only opens a spine
 		}
 		let (w, h, float_at) = match self.grid.floats.iter().find(|f| f.group.id == gid) {
 			Some(f) => {
@@ -658,7 +659,6 @@ impl PackedState {
 			target: None,
 			carried: false,
 			incoming: None,
-			fixed: false,
 			float_at,
 		});
 	}
@@ -669,7 +669,6 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(from);
-		let fixed = self.locked(std::slice::from_ref(&panel)); // a click still activates it
 		let (tabs, tile_w, tab_w, h) = match self.grid.floats.iter().find(|f| f.group.id == from) {
 			Some(f) => {
 				let (_, _, w, h) = self.shown(f);
@@ -697,7 +696,6 @@ impl PackedState {
 			target: None,
 			carried: false,
 			incoming: None,
-			fixed,
 			float_at: None,
 		});
 	}
@@ -712,6 +710,9 @@ impl PackedState {
 		if self.resize.is_some() {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
+		if self.locked {
+			return; // a locked dock takes no landing
+		}
 		let hosted = self
 			.grid
 			.cells
@@ -720,9 +721,6 @@ impl PackedState {
 			.chain(self.grid.floats.iter().map(|f| (&f.group, f.w, f.h)))
 			.find(|(g, ..)| g.tabs.contains(&panel))
 			.map(|(g, w, h)| (g.id, g.tabs.len(), w, h));
-		if hosted.is_some() && self.locked(std::slice::from_ref(&panel)) {
-			return; // a locked panel stays where it is
-		}
 		let (source, src_w, src_h, incoming) = match hosted {
 			Some((from, tabs, w, h)) => {
 				self.focus(from);
@@ -747,7 +745,6 @@ impl PackedState {
 			target: None,
 			carried: true,
 			incoming,
-			fixed: false,
 			float_at: None,
 		});
 	}
@@ -778,8 +775,8 @@ impl PackedState {
 	/// a no-op without a DOM).
 	pub fn drag_move(&mut self, cursor: (f64, f64)) {
 		let Some(mut d) = self.drag.clone() else { return };
-		if d.fixed {
-			return;
+		if self.locked {
+			return; // it never arms, so its release is a click
 		}
 		d.cursor = cursor;
 		if !d.armed {
@@ -1149,17 +1146,17 @@ impl PackedState {
 			}
 		};
 		match b {
-			Builtin::Undo => !gesture && self.restore(-1),
-			Builtin::Redo => !gesture && self.restore(1),
+			Builtin::Undo => !gesture && !self.locked && self.restore(-1),
+			Builtin::Redo => !gesture && !self.locked && self.restore(1),
 			Builtin::Close => match self.live(self.focused) {
-				Some(g) if !gesture && !self.locked(&self.group(g).expect("live() checked the group exists").tabs) => {
+				Some(g) if !gesture && !self.locked => {
 					self.close_tile(g);
 					true
 				}
 				_ => false,
 			},
 			Builtin::Float => match self.live(self.focused) {
-				Some(g) if !gesture && !self.locked(&self.group(g).expect("live() checked the group exists").tabs) => {
+				Some(g) if !gesture && !self.locked => {
 					self.toggle_float(g);
 					true
 				}
@@ -1286,7 +1283,7 @@ impl PackedState {
 				maximized: maximized == Some(gid),
 				collapsed: spine && maximized != Some(gid),
 				floating: false,
-				locked: self.locked(&cell.group.tabs),
+				locked: self.locked,
 				tabs: self.strip(&cell.group, titles),
 				grips: self.grips((left, top, right, bottom), view, g.free_left(idx), spine, maximized == Some(gid)),
 			});
@@ -1315,7 +1312,7 @@ impl PackedState {
 				maximized: maximized == Some(gid),
 				collapsed: false,
 				floating: true,
-				locked: self.locked(&f.group.tabs),
+				locked: self.locked,
 				tabs: self.strip(&f.group, titles),
 				grips,
 			});
@@ -1340,7 +1337,6 @@ impl PackedState {
 				id: id.clone(),
 				title: titles.get(id).cloned().unwrap_or_default(),
 				active: i == group.active,
-				locked: self.locked(std::slice::from_ref(id)),
 			})
 			.collect()
 	}
@@ -1480,7 +1476,6 @@ impl PackedState {
 					id: panel.clone(),
 					title: titles.get(panel).cloned().unwrap_or_default(),
 					active: true,
-					locked: false,
 				}],
 				false,
 			),
@@ -1562,16 +1557,6 @@ thread_local! {
 	static KEYS_OWNER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
-/// What a host declares of a panel, mirrored from its binding's panel list.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Declared {
-	/// What its content needs to stay legible; every tile hosting it is floored to fit.
-	pub min: MinSize,
-	/// The user can't close it or move it elsewhere: no close, no tile drag, no tear-out, no float or
-	/// dock. Resizing, collapsing, maximizing and others joining its tile stay open.
-	pub locked: bool,
-}
-
 /// A toast. `seq` keys its element, so a repeat remounts it and replays the fade.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
@@ -1593,7 +1578,7 @@ pub struct Frame {
 	pub collapsed: bool,
 	/// Above the grid (see [`PackedState::toggle_float`]): rendered in the floats layer, its body see-through.
 	pub floating: bool,
-	/// A tab is [`Declared::locked`]: the tile has no close, float or dock.
+	/// The dock is locked (see [`PackedState::set_locked`]): no close, float, dock or `+`, nor a tab's close.
 	pub locked: bool,
 	pub tabs: Vec<Tab>,
 	/// The grips to render, in paint order (none on a shadow), each with its inline style.
@@ -1605,8 +1590,6 @@ pub struct Tab {
 	pub id: PanelId,
 	pub title: String,
 	pub active: bool,
-	/// [`Declared::locked`]: no close.
-	pub locked: bool,
 }
 /// A panel's slot in the content overlay: its inline style and host group.
 pub struct ContentSlot {
@@ -1754,8 +1737,6 @@ struct Drag {
 	carried: bool,
 	/// A carried panel not hosted yet, and the `w×h` its tile wants; `source` is the tile its landing mints.
 	incoming: Option<(PanelId, u32, u32)>,
-	/// A locked tab's press: it never arms, so its release is a click.
-	fixed: bool,
 	/// A float moved by its header: where it was stored and where it showed at the press.
 	float_at: Option<((u32, u32), (u32, u32))>,
 }

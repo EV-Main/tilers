@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use dioxus::{html::input_data::MouseButton, prelude::*};
-use tilers_core::{Band, CSS, Config, Declared, Frame, Group, GroupId, PackedState, PanelId};
+use tilers_core::{Band, CSS, Config, Frame, Group, GroupId, MinSize, PackedState, PanelId};
 
-use crate::panel::DockPanel;
+use crate::{lock::Scope, panel::DockPanel};
 
 /// Imperative handle over the packed layout, handed to the host via `on_band`: a thin wrapper
 /// over the root-scope `Signal<PackedState>` so the host can script tiles, save/load, and read the
@@ -24,18 +24,18 @@ pub struct PackedApi {
 impl PackedApi {
 	/// `group`'s panels must already be in `panels`: their declared mins floor the tile.
 	pub fn place(&mut self, group: Group, w: u32, h: u32) {
-		let declared = declared(&self.panels.peek());
+		let mins = mins(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_panels(declared);
+		s.set_panels(mins);
 		s.place(group, w, h);
 	}
 
 	/// Open `group` floating above the grid at a wanted `w×h`: centered in the view, on top, focused.
 	/// Its panels must already be in `panels`.
 	pub fn float(&mut self, group: Group, w: u32, h: u32) {
-		let declared = declared(&self.panels.peek());
+		let mins = mins(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_panels(declared);
+		s.set_panels(mins);
 		s.float(group, w, h);
 	}
 
@@ -45,9 +45,9 @@ impl PackedApi {
 	}
 
 	pub fn add_tab(&mut self, group: GroupId, panel: PanelId) {
-		let declared = declared(&self.panels.peek());
+		let mins = mins(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_panels(declared);
+		s.set_panels(mins);
 		s.add_tab(group, panel);
 	}
 
@@ -55,13 +55,13 @@ impl PackedApi {
 	/// `w×h` tile or a tab of the strip it drops on; a panel already hosted moves there. Call it from
 	/// the drag source's `ondragstart`. `panel` must already be in `panels`.
 	pub fn carry(&mut self, panel: PanelId, w: u32, h: u32) {
-		let declared = declared(&self.panels.peek());
+		let mins = mins(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_panels(declared);
+		s.set_panels(mins);
 		s.carry(panel, w, h);
 	}
 
-	/// Close `panel`'s tab, and its tile with its last one. A locked panel too: the lock holds the user, not the host.
+	/// Close `panel`'s tab, and its tile with its last one. In a locked dock too: the lock holds the user, not the host.
 	pub fn close(&mut self, panel: &PanelId) {
 		self.state.write().close(panel);
 	}
@@ -134,9 +134,9 @@ impl PackedApi {
 	/// Replace the layout with a previously [`save`](Self::save)d one; errors on a corrupt or
 	/// future-version payload. Every panel it hosts must already be in `panels`.
 	pub fn load(&mut self, json: &str) -> Result<(), tilers_core::model::serial::LoadError> {
-		let declared = declared(&self.panels.peek());
+		let mins = mins(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_panels(declared);
+		s.set_panels(mins);
 		s.load(json)
 	}
 
@@ -157,7 +157,7 @@ impl PackedApi {
 ///   expected to place its tiles (or load its own default) against the now-real step size.
 /// - A tile's header is the framework's: its tabs (each with its `×`), then `?`, `+`, float/dock and
 ///   close. `actions` adds the host's own buttons before those, per tile; it never replaces or hides
-///   them — a panel's [`DockPanel::locked`] does that. A press anywhere in them is never the tile's.
+///   them — the [`LockScope`](crate::LockScope) it sits in does that. A press anywhere in them is never the tile's.
 ///   It runs inside this component's render, so hooks belong in a component it returns.
 /// - `on_add`: the header's `+` asks the host to open a tab in that tile; without it there is no `+`.
 #[component]
@@ -295,10 +295,16 @@ pub fn PackedArea(
 		frames.0.take(); // the closure holds `request`, which holds the closure
 	});
 
-	// A panel's declaration is host intent the state re-derives floors and locks from.
+	// A panel's declared min is host intent the state re-derives floors from.
 	use_effect(move || {
-		let declared = declared(&panels.read());
-		state.write().set_panels(declared);
+		let mins = mins(&panels.read());
+		state.write().set_panels(mins);
+	});
+
+	let scope = use_hook(try_consume_context::<Scope>);
+	use_effect(move || {
+		let locked = scope.as_ref().is_some_and(Scope::locked);
+		state.write().set_locked(locked);
 	});
 
 	// Undo history: snapshot a settled layout after each structural edit. `wants_undo_snapshot` is
@@ -381,7 +387,7 @@ pub fn PackedArea(
 										Some(label) => label.clone(),
 										None => rsx! { "{tab.title}" },
 									}
-									if !tab.locked {
+									if !frame.locked {
 										button {
 											class: "tl-tab-close",
 											title: "Close tab",
@@ -409,10 +415,10 @@ pub fn PackedArea(
 									}
 								}
 								button { class: "tl-action", title: "Keybinds", onclick: move |_| state.write().open_help(gid), "?" }
-								if let Some(on_add) = on_add {
-									button { class: "tl-action", title: "Add a tab", onclick: move |_| on_add.call(gid), "+" }
-								}
 								if !frame.locked {
+									if let Some(on_add) = on_add {
+										button { class: "tl-action", title: "Add a tab", onclick: move |_| on_add.call(gid), "+" }
+									}
 									button {
 										class: "tl-action",
 										title: if frame.floating { "Dock" } else { "Float" },
@@ -656,8 +662,8 @@ fn on_control(e: &PointerEvent) -> bool {
 	}
 }
 
-fn declared(panels: &[DockPanel]) -> HashMap<PanelId, Declared> {
-	panels.iter().map(|p| (p.id.clone(), Declared { min: p.min, locked: p.locked })).collect()
+fn mins(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
+	panels.iter().map(|p| (p.id.clone(), p.min)).collect()
 }
 
 /// Read the root's `getBoundingClientRect` origin + content box (`clientWidth/Height`, which
@@ -674,8 +680,8 @@ fn measure(el: &web_sys::Element, mut state: Signal<PackedState>, api: PackedApi
 		if let Some(cb) = on_band {
 			cb.call(api);
 		}
-		let declared = declared(&api.panels.peek());
-		state.write().set_panels(declared);
+		let mins = mins(&api.panels.peek());
+		state.write().set_panels(mins);
 	}
 }
 

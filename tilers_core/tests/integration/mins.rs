@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tilers_core::{Config, Declared, Group, GroupId, MinSize, PackedState, PanelId};
+use tilers_core::{Config, Group, GroupId, MinSize, PackedState, PanelId};
 
 const ORIGIN: (f64, f64) = (0.0, 0.0);
 const WIDTH: f64 = 1600.0;
@@ -21,13 +21,7 @@ fn content_min_holds_as_the_view_shrinks() {
 	let content_h = 100.0;
 	let mut state = PackedState::new(Config::default());
 	let panel = PanelId("table".into());
-	state.set_panels(HashMap::from([(
-		panel.clone(),
-		Declared {
-			min: MinSize::Px { w: 0.0, h: content_h },
-			locked: false,
-		},
-	)]));
+	state.set_panels(HashMap::from([(panel.clone(), MinSize::Px { w: 0.0, h: content_h })]));
 	state.set_measure(ORIGIN, (WIDTH, 974.0), false);
 	assert_eq!(state.take_band(), Some(false), "first measure is a miss natively");
 	state.place(Group::new(GroupId(0), panel), 8, 4);

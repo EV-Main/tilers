@@ -14,7 +14,7 @@ pub const CSS: &str = r#"
 	padding: calc(var(--tl-title-h, 2rem) / 8) 0 0 calc(var(--tl-title-h, 2rem) * 3 / 8);
 	align-items: stretch; overflow: hidden; cursor: grab; background: var(--tl-tabstrip-bg, #2d2d2d);
 	position: relative; user-select: none; }
-/* A locked tile's strip doesn't move it. */
+/* A locked dock's strips don't move their tiles. */
 .tl-locked .tl-header { cursor: default; }
 /* The grip's paint on the left rim, the drag-handle texture. */
 .tl-header::before { content: ""; position: absolute; pointer-events: none;
@@ -29,6 +29,12 @@ pub const CSS: &str = r#"
 .tl-action { cursor: pointer; border: 0; background: transparent; color: var(--tl-fg, #ddd);
 	opacity: 0.55; padding: 0 0.3125rem; font: inherit; line-height: 1; }
 .tl-action:hover { opacity: 1; background: var(--tl-tab-bg, #2d2d2d); }
+.tl-action:disabled { cursor: default; opacity: 0.3; background: transparent; }
+/* A lock scope's switch, wherever the host places it. */
+.tl-lock::before { content: ""; display: block; width: 1em; height: 1em; background: currentColor;
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Crect x='5' y='11' width='14' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 7.5-2'/%3E%3C/svg%3E") center / contain no-repeat; }
+.tl-lock[aria-pressed="true"]::before {
+	mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Crect x='5' y='11' width='14' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E"); }
 .tl-tab { display: flex; align-items: center; gap: 0.375rem; padding: 0 0.875rem; font-size: 0.8125rem;
 	white-space: nowrap; cursor: pointer; background: var(--tl-tab-bg, #2d2d2d);
 	border-right: 1px solid var(--tl-tab-border, #1e1e1e); }

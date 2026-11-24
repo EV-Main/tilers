@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use leptos::prelude::*;
-use tilers_leptos::{Config, DockPanel, Group, MinSize, PackedApi, PackedArea, PanelId, Step};
+use tilers_leptos::{Config, DockPanel, Group, LockScope, LockToggle, MinSize, PackedApi, PackedArea, PanelId, Step};
 
 fn main() {
 	#[cfg(target_arch = "wasm32")]
@@ -54,21 +54,20 @@ fn seed(api: PackedApi, panels: RwSignal<Vec<DockPanel>>) {
 #[component]
 fn App() -> impl IntoView {
 	let panels = RwSignal::new(Vec::<DockPanel>::new());
+	let locked = RwSignal::new(false);
 	let on_band: Arc<dyn Fn(PackedApi) + Send + Sync> = Arc::new(move |api: PackedApi| seed(api, panels));
 
 	view! {
-		<div style="position:fixed; inset:0; display:flex; flex-direction:column; background:#0b0f0e;">
-			<div style="flex:0 0 auto; height:44px; display:flex; align-items:center; gap:14px; padding:0 14px;
-			background:#0f1b18; border-bottom:2px solid #63e9cd; color:#63e9cd; font:700 15px system-ui;">
-				"InSilico (Leptos)"
+		<LockScope locked=locked>
+			<div style="position:fixed; inset:0; display:flex; flex-direction:column; background:#0b0f0e;">
+				<div style="flex:0 0 auto; height:44px; display:flex; align-items:center; gap:14px; padding:0 14px;
+				background:#0f1b18; border-bottom:2px solid #63e9cd; color:#63e9cd; font:700 15px system-ui;">
+					"InSilico (Leptos)" <LockToggle />
+				</div>
+				<div style="flex:1 1 auto; position:relative;">
+					<PackedArea panels=panels config=Config::default() on_band=on_band />
+				</div>
 			</div>
-			<div style="flex:1 1 auto; position:relative;">
-				<PackedArea
-					panels=panels
-					config=Config::default()
-					on_band=on_band
-				/>
-			</div>
-		</div>
+		</LockScope>
 	}
 }
