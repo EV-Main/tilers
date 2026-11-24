@@ -126,8 +126,8 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   so it stays put as the grid scrolls, and its content is the same overlay node it was as a tile.
   Docking is the one `drop`, from where it shows. Its stacking order is overlay state (`stack`), not layout.
 - A dock's lock gates the user, never the host: no gesture, key or header button changes which tiles
-  exist or where they are — no move, tear, close, float/dock, `+`, undo/redo or carry landing; resizing,
-  collapsing, maximizing and opening a tab stay open, and every `PackedApi` call still acts.
+  exist, or where or how large they are — no move, resize, tear, close, float/dock, `+`, undo/redo or carry
+  landing; maximizing and opening a tab stay open, and every `PackedApi` call still acts.
 - `focused`/`maximized` are overlay state beside the grid, never cells; they are filtered
   through `live()` so a stale id is inert. `drag`/`resize` address cells, so anything that
   replaces them (`reset`, and hence the band latch, and `load`) must clear them too.
@@ -145,9 +145,6 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   `Config::scroll_x` it runs on past it instead, as rows do downward: square steps of
   `row_h_rem`, stretched so a layout narrower than the view ends at its right edge, scrolling when
   wider. Either way the container's width decides how wide a column renders, never where a tile is.
-- A collapsed tile is a spine as wide as the title bar is tall, at the live step: derived like a
-  floor, never stored. What is layout is that it is collapsed and the width it opens back to
-  (`Cell::collapsed`). Nothing but opening sets a spine's width, so it has no width grips.
 - A min belongs to the panel (`DockPanel::min`), not the tile. A cell's floor is derived from its
   tabs' declared mins at the column step it renders at (with `scroll_x`, the stretched one) and the
   least row, on every measure, tab change and settled gesture; never stored as layout. A placement
@@ -158,7 +155,8 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   {Esc while the help, an inspect popup or a chord is open}. Everything else waits behind the leader.
 - One dock answers a keydown: the one a pointer last pressed in, claimed in the capture phase so of
   nested docks the innermost wins; before any press (or once that dock is gone), every dock not
-  nested in another.
+  nested in another. Its maximize key alone reaches past it: to the tile under the pointer, of nested
+  docks the innermost's, which then answers the keydowns; over none, its own focused tile.
 - A key aimed at an editable never acts, so text undo and typing stay native; that rule and the
   footprint's are the library's: `~/s/ev/web_std/docs/ARCHITECTURE.md`, "The `keymap` library".
 - Which key a keydown is, across layouts, is the library's rule (same section), not tilers'.

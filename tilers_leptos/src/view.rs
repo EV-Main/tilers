@@ -75,11 +75,6 @@ impl PackedApi {
 		self.state.update(|s| s.maximize(group));
 	}
 
-	/// Toggle `group` between its tile and a spine as wide as the title bar is tall.
-	pub fn collapse(&self, group: GroupId) {
-		self.state.update(|s| s.collapse(group));
-	}
-
 	pub fn resize(&self, idx: usize, new_w: u32, new_h: u32) {
 		self.state.update(|s| s.resize(idx, new_w, new_h));
 	}
@@ -187,19 +182,38 @@ pub fn PackedArea(
 		let observer = web_sys::ResizeObserver::new(on_resize.as_ref().unchecked_ref()).expect("ResizeObserver is baseline in every browser");
 		// Capture phase, so of nested docks the innermost claims last, and a tile's own `stopPropagation` can't skip it.
 		let press = std::rc::Rc::new(Closure::<dyn Fn()>::new(move || state.with_untracked(|s| s.claim_keys())));
+		// Capture phase, so of nested docks the innermost's tile is the one hovered last.
+		let over = std::rc::Rc::new(Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
+			if let Some(tile) = tilers_core::tile_at(&e) {
+				let maximize = move || {
+					state.update(|s| {
+						s.claim_keys();
+						s.focus(tile);
+						s.maximize(tile);
+					})
+				};
+				state.with_untracked(|s| s.hover(Some((tile, std::rc::Rc::new(maximize)))));
+			}
+		}));
+		let out = std::rc::Rc::new(Closure::<dyn Fn()>::new(move || state.with_untracked(|s| s.hover(None))));
 		root.on_load({
+			let (over, out) = (over.clone(), out.clone());
 			let observer = observer.clone();
 			let on_band = on_band.clone();
 			let press = press.clone();
 			move |el| {
 				el.add_event_listener_with_callback_and_bool("pointerdown", (*press).as_ref().unchecked_ref(), true)
 					.expect("add pointerdown listener");
+				el.add_event_listener_with_callback_and_bool("pointerover", (*over).as_ref().unchecked_ref(), true)
+					.expect("add pointerover listener");
+				el.add_event_listener_with_callback("pointerleave", (*out).as_ref().unchecked_ref())
+					.expect("add pointerleave listener");
 				state.update(|s| s.set_root(el.clone().into()));
 				observer.observe(&el);
 				measure(el.into(), state, api, on_band.as_ref())
 			}
 		});
-		let held = send_wrapper::SendWrapper::new((observer, on_resize, press));
+		let held = send_wrapper::SendWrapper::new((observer, on_resize, press, over, out));
 		on_cleanup(move || held.take().0.disconnect());
 	}
 	#[cfg(not(target_arch = "wasm32"))]
@@ -375,10 +389,14 @@ pub fn PackedArea(
 					children=move |panel| {
 						let pid = panel.id.clone();
 						let pid_click = panel.id.clone();
+						let pid_over = panel.id.clone();
 						let content = panel.content.clone();
 						view! {
 							<div
 								class="tl-render-overlay"
+								data-tile=move || {
+									state.with(|s| s.content_slots().get(&pid_over).map(|sl| sl.group.0.to_string()))
+								}
 								style=move || {
 									state
 										.with(|s| {
@@ -468,7 +486,7 @@ pub fn PackedArea(
 					.map(|g| {
 						view! {
 							<div
-								class=if g.collapsed { "tl-ghost tl-collapsed" } else { "tl-ghost" }
+								class="tl-ghost"
 								style=format!(
 									"left:{}px; top:{}px; width:{}px; height:{}px;",
 									g.left,
@@ -579,16 +597,11 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 	}
 	let gid = frame.gid;
 	let header_class = if frame.tab_drop { "tl-header tl-tab-drop" } else { "tl-header" };
-	let tile_class = [
-		Some("tl-tile"),
-		frame.collapsed.then_some("tl-collapsed"),
-		frame.floating.then_some("tl-float"),
-		frame.locked.then_some("tl-locked"),
-	]
-	.into_iter()
-	.flatten()
-	.collect::<Vec<_>>()
-	.join(" ");
+	let tile_class = [Some("tl-tile"), frame.floating.then_some("tl-float"), frame.locked.then_some("tl-locked")]
+		.into_iter()
+		.flatten()
+		.collect::<Vec<_>>()
+		.join(" ");
 	let (floating, locked) = (frame.floating, frame.locked);
 	let tabs = frame
 		.tabs
@@ -637,7 +650,7 @@ fn render_frame(frame: tilers_core::Frame, state: RwSignal<PackedState, LocalSto
 		})
 		.collect_view();
 	view! {
-		<div class=tile_class style=frame.style>
+		<div class=tile_class style=frame.style data-tile=gid.0.to_string()>
 			<div class="tl-group">
 				<div
 					class=header_class

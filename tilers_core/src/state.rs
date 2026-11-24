@@ -12,7 +12,11 @@
 //! [`ghost`](PackedState::ghost), …) return plain data — ids and inline-style strings — that a
 //! template renders 1:1, so all the `rsx!`/`view!`-adjacent computation lives here once.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+	cell::RefCell,
+	collections::{HashMap, HashSet},
+	rc::Rc,
+};
 
 use ev_lib::keymap::{Platform, Step, Trie};
 
@@ -55,7 +59,7 @@ pub struct PackedState {
 	/// Every panel's declared min, mirrored from the binding's panel list. Host intent, not layout:
 	/// floors are re-derived from it ([`refloor`](Self::refloor)) whenever the step or a tile's tabs change.
 	panels: HashMap<PanelId, MinSize>,
-	/// The user can't change which tiles exist or where they are; the host can.
+	/// The user can't change which tiles exist, or where or how large they are; the host can.
 	locked: bool,
 	band: Band,
 	drag: Option<Drag>,
@@ -148,6 +152,17 @@ impl PackedState {
 	/// the innermost claims last and keeps the keyboard.
 	pub fn claim_keys(&self) {
 		KEYS_OWNER.with(|o| o.set(Some(self.instance)));
+	}
+
+	/// The pointer moved onto tile `over`, or off this dock. `over` carries what the maximize key does there when
+	/// another dock answers it: claim the keys for this one, focus the tile and [`maximize`](Self::maximize) it.
+	pub fn hover(&self, over: Option<(GroupId, Rc<dyn Fn()>)>) {
+		let dock = self.instance;
+		let was = HOVERED.with_borrow_mut(|h| match over {
+			Some((tile, maximize)) => h.replace(Hovered { dock, tile, maximize }),
+			None => h.take_if(|h| h.dock == dock),
+		});
+		drop(was); // out of the borrow: its closure may hold the last handle to a dock
 	}
 
 	fn owns_keys(&self) -> bool {
@@ -290,32 +305,6 @@ impl PackedState {
 		self.grid.cells.iter().map(|c| &c.group).chain(self.grid.floats.iter().map(|f| &f.group)).find(|g| g.id == gid)
 	}
 
-	/// Toggle `group` between its tile and a spine: the tile narrows to the spine, keeping the width it
-	/// opens back to, and opening grows it back, pushing what it reaches as a grip would.
-	pub fn collapse(&mut self, group: GroupId) {
-		assert!(self.step_px.0 > 0.0, "collapse before the first measure: no step size yet");
-		let (spine, cols) = (self.spine(), self.cols);
-		let base = self.base();
-		let idx = base.cells.iter().position(|c| c.group.id == group).expect("collapse: group is a tile; a float has no spine");
-		let c = &mut base.cells[idx];
-		let right = match c.collapsed.take() {
-			Some(w) => c.x + w,
-			None => {
-				(c.collapsed, c.min_w) = (Some(c.w), spine);
-				c.x + spine
-			}
-		};
-		let (left, h) = (c.x, c.h);
-		*base = base.resized(idx, left, right, h, cols);
-		base.reassign_ranks();
-		self.refloor();
-	}
-
-	/// A spine's width in steps: the title bar's height, the header turned on its side.
-	fn spine(&self) -> u32 {
-		((self.title_h() / self.step_px.0).ceil() as u32).max(1)
-	}
-
 	/// The layout an edit lands on: while a resize is in flight the live grid is derived from its
 	/// press layout, so the edit goes there and [`follow`](Self::follow) re-derives over it.
 	fn base(&mut self) -> &mut PackedGrid {
@@ -389,11 +378,12 @@ impl PackedState {
 	}
 
 	/// Whether the dock's lock scope holds it — the binding mirrors the nearest one here on each change.
-	/// A drag in flight as it locks lands nowhere.
+	/// As it locks, a drag in flight lands nowhere and a resize ends where it is.
 	pub fn set_locked(&mut self, locked: bool) {
 		self.locked = locked;
 		if locked {
 			self.drag_cancel();
+			self.resize_end();
 		}
 	}
 
@@ -417,18 +407,11 @@ impl PackedState {
 		if self.step_px.0 <= 0.0 {
 			return;
 		}
-		let (spine, cols) = (self.spine(), self.cols);
+		let cols = self.cols;
 		loop {
 			let step = (self.step().0, self.step_px.1);
 			let base = self.resize.as_ref().map_or(&self.grid, |r| &r.press);
-			let floors: Vec<(u32, u32)> = base
-				.cells
-				.iter()
-				.map(|c| {
-					let (w, h) = self.floor(&c.group.tabs, step);
-					(if c.collapsed.is_some() { spine } else { w }, h)
-				})
-				.collect();
+			let floors: Vec<(u32, u32)> = base.cells.iter().map(|c| self.floor(&c.group.tabs, step)).collect();
 			let float_floors: Vec<(u32, u32)> = base.floats.iter().map(|f| self.floor(&f.group.tabs, self.step_px)).collect();
 			let base = self.base();
 			for (c, (w, h)) in base.cells.iter_mut().zip(floors) {
@@ -450,7 +433,6 @@ impl PackedState {
 		let cols = self.cols;
 		let base = self.base();
 		let c = &base.cells[idx];
-		assert!(c.collapsed.is_none() || new_w == c.w, "resize sets a spine's width, which is derived: open it first");
 		*base = base.resized(idx, c.x, c.x + new_w, new_h, cols);
 		base.reassign_ranks();
 		self.follow();
@@ -638,8 +620,8 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(gid);
-		if self.locked && !self.spined(gid) {
-			return; // its release would be a click, which only opens a spine
+		if self.locked {
+			return; // a locked tile stays where it is
 		}
 		let (w, h, float_at) = match self.grid.floats.iter().find(|f| f.group.id == gid) {
 			Some(f) => {
@@ -669,22 +651,18 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(from);
-		let (tabs, tile_w, tab_w, h) = match self.grid.floats.iter().find(|f| f.group.id == from) {
+		let (tabs, w, h) = match self.grid.floats.iter().find(|f| f.group.id == from) {
 			Some(f) => {
 				let (_, _, w, h) = self.shown(f);
-				(f.group.tabs.len(), w, w, h)
+				(f.group.tabs.len(), w, h)
 			}
 			None => {
 				let c = self.grid.cells.iter().find(|c| c.group.id == from).expect("press_tab: group exists");
-				(c.group.tabs.len(), c.w, c.collapsed.unwrap_or(c.w), c.h)
+				(c.group.tabs.len(), c.w, c.h)
 			}
 		};
-		// A lone tab is its tile, so moving it keeps the tile (a spine stays one); a torn tab opens at the width a spine keeps.
-		let (source, w) = if tabs > 1 {
-			(DragSource::Tab { panel, from }, tab_w)
-		} else {
-			(DragSource::Tile(from), tile_w)
-		};
+		// A lone tab is its tile, so moving it keeps the tile.
+		let source = if tabs > 1 { DragSource::Tab { panel, from } } else { DragSource::Tile(from) };
 		self.drag = Some(Drag {
 			source,
 			src_w: w,
@@ -840,7 +818,7 @@ impl PackedState {
 	}
 
 	/// Commit a drag: an armed release runs the same [`drop`](PackedGrid::drop) the preview used; an
-	/// unarmed release is a plain click, which activates a tab and opens a spine.
+	/// unarmed release is a plain click, which activates a tab.
 	pub fn drag_release(&mut self) {
 		let Some(d) = self.drag.take() else { return };
 		if d.float_at.is_some() {
@@ -855,22 +833,10 @@ impl PackedState {
 				self.refloor();
 			}
 		} else if !d.carried {
-			let group = match &d.source {
-				DragSource::Tab { panel, from } => {
-					self.drag_enter_tab(*from, panel);
-					*from
-				}
-				DragSource::Tile(g) => *g,
-			};
-			if self.spined(group) {
-				self.collapse(group);
+			if let DragSource::Tab { panel, from } = &d.source {
+				self.drag_enter_tab(*from, panel);
 			}
 		}
-	}
-
-	/// Whether `group` shows as a spine: collapsed, and not maximized out of it.
-	fn spined(&self, group: GroupId) -> bool {
-		self.live(self.maximized) != Some(group) && self.grid.cells.iter().any(|c| c.group.id == group && c.collapsed.is_some())
 	}
 
 	/// A native drag (a host's card, a file) entered a tab: open it, so its content can take the drop.
@@ -978,8 +944,8 @@ impl PackedState {
 
 	/// Begin a resize of tile or float `gid` from `grip` at the pointer `(px, py)`.
 	pub fn resize_start(&mut self, gid: GroupId, grip: Grip, px: f64, py: f64) {
-		if self.drag.is_some() {
-			return; // one gesture at a time
+		if self.drag.is_some() || self.locked {
+			return; // one gesture at a time, none in a locked dock
 		}
 		self.resize_end(); // a second pointer on another grip: the first gesture ends where it is
 		let free_left = match self.grid.cells.iter().position(|c| c.group.id == gid) {
@@ -1162,19 +1128,30 @@ impl PackedState {
 				}
 				_ => false,
 			},
-			Builtin::Maximize => match self.live(self.focused) {
-				Some(f) => {
-					self.maximize(f);
+			Builtin::Maximize => match HOVERED.with_borrow(Clone::clone) {
+				Some(h) if h.dock != self.instance => {
+					// after this keydown reached every dock: it moves the keys, and must not be answered twice
+					#[cfg(target_arch = "wasm32")]
+					{
+						use wasm_bindgen::{JsCast, closure::Closure};
+						let run = Closure::once_into_js(move || (h.maximize)());
+						web_sys::window()
+							.expect("a browser window")
+							.set_timeout_with_callback(run.unchecked_ref())
+							.expect("setTimeout never throws");
+					}
+					#[cfg(not(target_arch = "wasm32"))]
+					(h.maximize)();
 					true
 				}
-				None => false,
-			},
-			Builtin::Collapse => match self.live(self.focused) {
-				Some(g) if !gesture && self.grid.cells.iter().any(|c| c.group.id == g) => {
-					self.collapse(g);
-					true
-				}
-				_ => false,
+				over => match self.live(over.map(|h| h.tile)).or(self.live(self.focused)) {
+					Some(g) => {
+						self.focus(g);
+						self.maximize(g);
+						true
+					}
+					None => false,
+				},
 			},
 			Builtin::Inspect => match self.live(self.maximized).or(self.live(self.focused)) {
 				Some(g) => {
@@ -1266,7 +1243,6 @@ impl PackedState {
 					shadow: true,
 					tab_drop: false,
 					maximized: false,
-					collapsed: false,
 					floating: false,
 					locked: false,
 					tabs: Vec::new(),
@@ -1274,18 +1250,16 @@ impl PackedState {
 				});
 				continue;
 			}
-			let spine = cell.collapsed.is_some();
 			out.push(Frame {
 				gid,
 				style,
 				shadow: false,
 				tab_drop,
 				maximized: maximized == Some(gid),
-				collapsed: spine && maximized != Some(gid),
 				floating: false,
 				locked: self.locked,
 				tabs: self.strip(&cell.group, titles),
-				grips: self.grips((left, top, right, bottom), view, g.free_left(idx), spine, maximized == Some(gid)),
+				grips: self.grips((left, top, right, bottom), view, g.free_left(idx), maximized == Some(gid)),
 			});
 		}
 		let (sw, sh) = self.step_px;
@@ -1301,7 +1275,7 @@ impl PackedState {
 				let (left, top, right, bottom) = (x as f64 * sw, y as f64 * sh, (x + w) as f64 * sw, (y + h) as f64 * sh);
 				(
 					sticky((left, top, w as f64 * sw, h as f64 * sh), 201 + 2 * k),
-					self.grips((left, top, right, bottom), self.root_size, x > 0, false, false),
+					self.grips((left, top, right, bottom), self.root_size, x > 0, false),
 				)
 			};
 			out.push(Frame {
@@ -1310,7 +1284,6 @@ impl PackedState {
 				shadow: false,
 				tab_drop: false,
 				maximized: maximized == Some(gid),
-				collapsed: false,
 				floating: true,
 				locked: self.locked,
 				tabs: self.strip(&f.group, titles),
@@ -1348,27 +1321,27 @@ impl PackedState {
 	/// clear of it: the right one of a rect reaching the band at the view's right is a [`Grip::Wall`],
 	/// the bottom one of a rect reaching that band at its bottom a [`Grip::Fold`], which the stylesheet
 	/// places from `--tl-wall`/`--tl-fold`, the view's edge right of the rect's left/below its top.
-	fn grips(&self, (left, top, right, bottom): (f64, f64, f64, f64), (view_right, view_bottom): (f64, f64), free_left: bool, spine: bool, maximized: bool) -> Vec<(Grip, String)> {
+	fn grips(&self, (left, top, right, bottom): (f64, f64, f64, f64), (view_right, view_bottom): (f64, f64), free_left: bool, maximized: bool) -> Vec<(Grip, String)> {
+		if self.locked {
+			return Vec::new();
+		}
 		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
 		// A host's grip is guessed at most twice ours: its root font may be larger.
 		let walled = self.framed && !maximized && left < view_right && right > view_right - 2.0 * grip;
 		let folded = self.framed && !maximized && top < view_bottom && bottom > view_bottom - 2.0 * grip;
-		// A spine's width is derived, so it has no grip that sets one, maximized or not.
 		[
-			(!spine && free_left).then_some((Grip::Left, String::new())),
-			(!spine).then(|| {
-				if walled {
-					(Grip::Wall, format!("--tl-wall:{}px;", view_right - left))
-				} else {
-					(Grip::Right, String::new())
-				}
+			free_left.then_some((Grip::Left, String::new())),
+			Some(if walled {
+				(Grip::Wall, format!("--tl-wall:{}px;", view_right - left))
+			} else {
+				(Grip::Right, String::new())
 			}),
 			Some(if folded {
 				(Grip::Fold, format!("--tl-fold:{}px;", view_bottom - top))
 			} else {
 				(Grip::Bottom, String::new())
 			}),
-			(!spine).then_some((Grip::Corner, String::new())),
+			Some((Grip::Corner, String::new())),
 		]
 		.into_iter()
 		.flatten()
@@ -1407,8 +1380,7 @@ impl PackedState {
 		for cell in &g.cells {
 			let active = cell.group.active_panel().clone();
 			for id in &cell.group.tabs {
-				let spine = cell.collapsed.is_some() && maximized != Some(cell.group.id);
-				let style = if hidden.contains(id) || spine {
+				let style = if hidden.contains(id) {
 					"display:none;".to_string()
 				} else {
 					slot_style(maximized, cell.group.id, cell.x, cell.y, cell.w, cell.h, id == &active, sw, sh, self.title_h())
@@ -1466,24 +1438,17 @@ impl PackedState {
 	pub fn ghost(&self, titles: &HashMap<PanelId, String>) -> Option<Ghost> {
 		// The browser draws a carry's drag image; a moving float is its own.
 		let d = self.drag.as_ref().filter(|d| d.armed && !d.carried && d.float_at.is_none())?;
-		let (tabs, collapsed) = match &d.source {
-			DragSource::Tile(g) => {
-				let spine = self.grid.cells.iter().any(|c| c.group.id == *g && c.collapsed.is_some());
-				(self.strip(self.group(*g).expect("drag source group exists"), titles), spine)
-			}
-			DragSource::Tab { panel, .. } => (
-				vec![Tab {
-					id: panel.clone(),
-					title: titles.get(panel).cloned().unwrap_or_default(),
-					active: true,
-				}],
-				false,
-			),
+		let tabs = match &d.source {
+			DragSource::Tile(g) => self.strip(self.group(*g).expect("drag source group exists"), titles),
+			DragSource::Tab { panel, .. } => vec![Tab {
+				id: panel.clone(),
+				title: titles.get(panel).cloned().unwrap_or_default(),
+				active: true,
+			}],
 		};
 		let (sw, sh) = self.step();
 		Some(Ghost {
 			tabs,
-			collapsed,
 			left: d.cursor.0 - d.grab.0,
 			top: d.cursor.1 - d.grab.1,
 			w: d.src_w as f64 * sw,
@@ -1548,6 +1513,7 @@ impl Drop for PackedState {
 				o.set(None);
 			}
 		});
+		self.hover(None);
 	}
 }
 
@@ -1555,6 +1521,7 @@ thread_local! {
 	static INSTANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 	/// The dock a pointer last pressed in, innermost first; `None` until a press, or once it is dropped.
 	static KEYS_OWNER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+	static HOVERED: RefCell<Option<Hovered>> = const { RefCell::new(None) };
 }
 
 /// A toast. `seq` keys its element, so a repeat remounts it and replays the fade.
@@ -1574,16 +1541,15 @@ pub struct Frame {
 	pub tab_drop: bool,
 	/// Filling the view (see [`PackedState::maximize`]).
 	pub maximized: bool,
-	/// Showing as a spine (see [`PackedState::collapse`]); a maximized tile shows open.
-	pub collapsed: bool,
 	/// Above the grid (see [`PackedState::toggle_float`]): rendered in the floats layer, its body see-through.
 	pub floating: bool,
-	/// The dock is locked (see [`PackedState::set_locked`]): no close, float, dock or `+`, nor a tab's close.
+	/// The dock is locked (see [`PackedState::set_locked`]): no close, float, dock or `+`, no grips, nor a tab's close.
 	pub locked: bool,
 	pub tabs: Vec<Tab>,
 	/// The grips to render, in paint order (none on a shadow), each with its inline style.
 	pub grips: Vec<(Grip, String)>,
 }
+
 /// One tab in a [`Frame`]'s header: its panel id (render key + `data-panel`), label, and whether
 /// it's the active tab.
 pub struct Tab {
@@ -1599,8 +1565,6 @@ pub struct ContentSlot {
 /// The floating drag ghost: the header it carries, top-left in client px, and its size in px.
 pub struct Ghost {
 	pub tabs: Vec<Tab>,
-	/// A spine being moved: drawn as one.
-	pub collapsed: bool,
 	pub left: f64,
 	pub top: f64,
 	pub w: f64,
@@ -1650,6 +1614,26 @@ impl Grip {
 pub fn framed(root: &web_sys::Element) -> bool {
 	let win = web_sys::window().expect("a mounted root has a window");
 	!matches!(win.frame_element(), Ok(None)) || root.parent_element().is_some_and(|p| p.closest(".tl-tile").expect("a constant, valid selector").is_some())
+}
+
+/// The tile of the dock listening to `e` that `e`'s target is in; `None` over none of its own, a nested
+/// dock's tile included. Read by the bindings for [`PackedState::hover`].
+#[cfg(target_arch = "wasm32")]
+pub fn tile_at(e: &web_sys::Event) -> Option<GroupId> {
+	use wasm_bindgen::JsCast;
+	let el = |t: Option<web_sys::EventTarget>| t.and_then(|t| t.dyn_into::<web_sys::Element>().ok()).expect("a pointer event on a root targets an element");
+	let tile = el(e.target()).closest("[data-tile]").expect("a constant, valid selector")?;
+	let dock = tile.closest(".tl-packed").expect("a constant, valid selector");
+	let id = tile.get_attribute("data-tile").expect("selected by it");
+	(dock == Some(el(e.current_target()))).then(|| GroupId(id.parse().expect("bindings write a group id")))
+}
+
+/// The tile under the pointer, of nested docks the innermost's (see [`PackedState::hover`]).
+#[derive(Clone)]
+struct Hovered {
+	dock: u64,
+	tile: GroupId,
+	maximize: Rc<dyn Fn()>,
 }
 
 /// A cached layout that couldn't be used. Loud on purpose: a seed cache that silently wipes itself

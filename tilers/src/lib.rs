@@ -1,6 +1,6 @@
 //! `tilers` — a packed-grid tiling/docking layout: fixed-size tiles that snap to a step grid,
 //! never overlap, and leave whitespace below (InsilicoTerminal's look). Panes split, resize, tab
-//! together, collapse, maximize, and float, with the arrangement cached per screen band in `localStorage`.
+//! together, maximize, and float, with the arrangement cached per screen band in `localStorage`.
 //!
 //! This crate is a thin **facade** over the ecosystem — pick a UI binding with a feature flag:
 //!

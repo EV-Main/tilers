@@ -28,7 +28,6 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 	let grid = state.grid();
 	let cols = state.cols();
 	let (sw, sh) = world.floor_step();
-	let least_w = world.step_px().0;
 	let title_h = state.title_h();
 	let rem_px = title_h / world.cfg.title_h_rem;
 	if grid.state != GridState::Settled {
@@ -47,9 +46,8 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 			};
 			(w.max(pw), h.max(ph))
 		});
-		let (need_w, at_w) = if c.collapsed.is_some() { (title_h, least_w) } else { (need_w, sw) }; // a spine is the title bar on its side, at the least step
 		let tight = |floor: u32, step: f64, need: f64| floor as f64 * step >= need - HAIRLINE && (floor <= 1 || ((floor - 1) as f64) * step < need + HAIRLINE);
-		if !tight(c.min_w, at_w, need_w) || !tight(c.min_h, sh, need_h) {
+		if !tight(c.min_w, sw, need_w) || !tight(c.min_h, sh, need_h) {
 			return Err(format!(
 				"floor {}x{} isn't what its tabs need ({need_w:.1}x{need_h:.1}px at {sw:.2}x{sh:.2}px steps): {c:?}",
 				c.min_w, c.min_h
@@ -62,9 +60,6 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 		}
 		if c.x + c.w > cols {
 			return Err(format!("cell spills past cols={cols}: {c:?}"));
-		}
-		if c.collapsed.is_some() && c.w != c.min_w.min(cols) {
-			return Err(format!("a spine is not its derived width {}: {c:?}", c.min_w));
 		}
 		if c.group.tabs.is_empty() {
 			return Err(format!("empty group {:?}", c.group.id));
@@ -161,18 +156,6 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 		}
 	}
 
-	// A spine's width is derived, so nothing sets one; its content is hidden, its strip being all it shows.
-	for f in frames.iter().filter(|f| grid.cells.iter().any(|c| c.group.id == f.gid && c.collapsed.is_some())) {
-		if let Some((g, _)) = f.grips.iter().find(|(g, _)| !matches!(g, Grip::Bottom | Grip::Fold)) {
-			return Err(format!("spine {:?} renders a {g:?} grip", f.gid));
-		}
-	}
-	for f in frames.iter().filter(|f| f.collapsed) {
-		if let Some((p, _)) = state.content_slots().into_iter().find(|(_, s)| s.group == f.gid && rect(&s.style).is_some()) {
-			return Err(format!("spine {:?} shows panel {}", f.gid, p.0));
-		}
-	}
-
 	// A host dock's bottom and right grips cover its tile's last grip-thickness and 1px border: this
 	// view's own edges, when the dock is framed in that tile. Its root font may be larger than ours,
 	// so its grip is guessed at up to twice ours. An edge grip running along inside that
@@ -227,8 +210,8 @@ pub fn check_in_flight(world: &World) -> Result<(), String> {
 	if let Some(f) = frames.iter().find(|f| f.locked != (world.locked && !f.shadow)) {
 		return Err(format!("{:?} renders locked: {}, in a dock locked: {}", f.gid, f.locked, world.locked));
 	}
-	if world.locked && state.ghost(&titles).is_some() {
-		return Err("a locked dock let a drag arm".to_string());
+	if world.locked && (state.ghost(&titles).is_some() || state.resizing().is_some() || frames.iter().any(|f| !f.grips.is_empty())) {
+		return Err("a locked dock let a gesture start, or offers a grip".to_string());
 	}
 
 	// The ghost exists exactly while the drag is armed, so it is the public witness of arming; an

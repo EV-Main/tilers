@@ -7,7 +7,7 @@
 //! price walks, prints a trade tape, fills your resting limit orders, and books PnL — so a fill
 //! placed in the order ticket ripples through Positions, Balances, Orders, Trades and Console at
 //! once. Tiles pack left-to-right; the top-bar `+` spawns a random window and `⧉` opens one floating,
-//! each tile's `+` opens the catalog as a new tab, the host's own header buttons maximize and collapse
+//! each tile's `+` opens the catalog as a new tab, the host's own header button maximizes
 //! beside the framework's, the top bar's lock holds the board, and the grip resizes in `STEP` increments.
 #![feature(default_field_values)]
 #![expect(clippy::useless_format, reason = "rsx! expands an attribute's `\"{x}\"` through `format!`")]
@@ -135,25 +135,13 @@ fn panel_of(kind: Kind, id: PanelId) -> DockPanel {
 	}
 }
 
-/// The host's own header buttons, before the framework's: maximize and collapse.
+/// The host's own header button, before the framework's: maximize.
 fn tile_actions() -> Callback<Tile, Element> {
-	Callback::new(
-		move |Tile {
-		          group,
-		          maximized,
-		          collapsed,
-		          floating,
-		          mut api,
-		          ..
-		      }: Tile| {
-			rsx! {
-				button { class: "tl-action", title: if maximized { "Restore" } else { "Maximize" }, onclick: move |_| api.maximize(group), if maximized { "⤡" } else { "⤢" } }
-				if !floating {
-					button { class: "tl-action", title: if collapsed { "Expand" } else { "Collapse" }, onclick: move |_| api.collapse(group), if collapsed { "▸" } else { "◂" } }
-				}
-			}
-		},
-	)
+	Callback::new(move |Tile { group, maximized, mut api, .. }: Tile| {
+		rsx! {
+			button { class: "tl-action", title: if maximized { "Restore" } else { "Maximize" }, onclick: move |_| api.maximize(group), if maximized { "⤡" } else { "⤢" } }
+		}
+	})
 }
 
 /// A unique panel id + its content for `kind`, minted from the running counter.

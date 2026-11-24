@@ -40,16 +40,15 @@ impl std::fmt::Display for Command {
 	}
 }
 
-/// Close, maximize, collapse, float and inspect act on the focused pane; close takes all its tabs.
+/// Close, float and inspect act on the focused pane; close takes all its tabs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Builtin {
 	Undo,
 	Redo,
 	Close,
+	/// Toggle the pane under the pointer filling its dock, of nested docks the innermost; the focused one when it is over none.
 	Maximize,
-	/// Toggle the pane between its tile and a spine.
-	Collapse,
 	/// Float the pane above the grid, or dock it where it floats.
 	Float,
 	Inspect,
@@ -69,7 +68,6 @@ impl Builtin {
 			Self::Close => "Close pane",
 			Self::Float => "Float / dock pane",
 			Self::Maximize => "Maximize pane",
-			Self::Collapse => "Collapse pane",
 			Self::Inspect => "Inspect pane",
 			Self::Help => "Keybinds",
 			Self::Cache => "Cache layout",
@@ -120,7 +118,6 @@ pub(crate) fn default_keymap() -> Keymap {
 						run(key("u"), "undo", Builtin::Undo),
 						run(key("U"), "redo", Builtin::Redo),
 						run(key("f"), "maximize", Builtin::Maximize),
-						run(key("c"), "collapse", Builtin::Collapse),
 						run(key("z"), "float", Builtin::Float),
 						run(key("Backspace"), "close", Builtin::Close),
 						run(key("d"), "inspect", Builtin::Inspect),

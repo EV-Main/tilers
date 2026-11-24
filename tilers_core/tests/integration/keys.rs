@@ -266,6 +266,55 @@ fn inspect_and_maximize_act_on_the_focused_pane() {
 }
 
 #[test]
+fn maximize_acts_on_the_hovered_pane() {
+	let (mut s, _) = edited(Config::default());
+	let unused = || Rc::new(|| -> () { unreachable!("its own dock answers") }) as Rc<dyn Fn()>;
+	let shown = |s: &PackedState| s.frames(&HashMap::new()).iter().map(|f| f.gid).collect::<Vec<_>>();
+	s.focus(GroupId(0));
+	s.hover(Some((GroupId(1), unused())));
+	press(&mut s, seq("Alt+z f"));
+	assert_eq!(shown(&s), [GroupId(1)], "not the one last pressed");
+	press(&mut s, seq("Alt+z f"));
+	assert_eq!(shown(&s).len(), 2, "still hovered: restored");
+	press(&mut s, seq("Alt+z d"));
+	assert_eq!(s.inspect().len(), 1);
+	s.hover(None);
+	s.focus(GroupId(0));
+	press(&mut s, seq("Alt+z f"));
+	assert_eq!(shown(&s), [GroupId(0)], "over none: the focused pane");
+}
+
+#[test]
+fn maximize_reaches_the_hovered_pane_of_another_dock() {
+	let (mut pressed, _) = edited(Config::default());
+	let (other, _) = edited(Config::default());
+	let other = Rc::new(RefCell::new(other));
+	let shown = |s: &PackedState| s.frames(&HashMap::new()).iter().map(|f| f.gid).collect::<Vec<_>>();
+	pressed.claim_keys();
+	let maximize = Rc::new({
+		let other = other.clone();
+		move || {
+			let mut s = other.borrow_mut();
+			s.claim_keys();
+			s.focus(GroupId(1));
+			s.maximize(GroupId(1));
+		}
+	});
+	other.borrow().hover(Some((GroupId(1), maximize)));
+	pressed.hover(None);
+	press(&mut pressed, seq("Alt+z f"));
+	assert_eq!(shown(&pressed).len(), 2, "the dock pressed in stays as it was");
+	assert_eq!(shown(&other.borrow()), [GroupId(1)]);
+	press(&mut other.borrow_mut(), seq("Alt+z f"));
+	assert_eq!(shown(&other.borrow()).len(), 2, "it answers the keys now, and restores");
+	other.borrow().hover(None);
+	pressed.claim_keys();
+	pressed.focus(GroupId(0));
+	press(&mut pressed, seq("Alt+z f"));
+	assert_eq!(shown(&pressed), [GroupId(0)]);
+}
+
+#[test]
 fn undo_mid_resize_leaves_the_gesture_intact() {
 	let (mut s, _) = edited(Config::default());
 	let g = s.grid().cells[1].group.id;

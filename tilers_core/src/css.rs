@@ -47,13 +47,6 @@ pub const CSS: &str = r#"
 .tl-tab.tl-active .tl-tab-close, .tl-tab:hover .tl-tab-close { opacity: 0.55; }
 .tl-tab .tl-tab-close:hover { opacity: 1; }
 .tl-content-slot { flex: 1 1 auto; overflow: hidden; }
-/* A spine: the header turned on its side, filling the tile. Its tabs share its length, so a host's
-   label is what a drop along it lands on. */
-.tl-collapsed .tl-header { height: 100%; writing-mode: vertical-rl;
-	padding: calc(var(--tl-title-h, 2rem) / 4) 0 calc(var(--tl-title-h, 2rem) / 4) 0; }
-.tl-collapsed .tl-header::before { content: none; }
-.tl-collapsed .tl-tab { flex: 1 1 0; padding: 0.5rem 0; border-right: 0; }
-.tl-collapsed .tl-content-slot { display: none; }
 /* The content overlay and the floats' frames: as large as the scrolled content, so a float's sticky box
    holds its place in the view at any scroll. `--tl-extent-*` come from `PackedState::root_style`. */
 .tl-overlay, .tl-floats { position: absolute; left: 0; top: 0; pointer-events: none;

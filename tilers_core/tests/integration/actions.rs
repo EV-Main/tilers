@@ -127,13 +127,9 @@ pub enum Action {
 }
 
 impl Action {
-	/// Whether this, done to a locked dock showing `before`, left what the lock holds: which tiles exist and
-	/// where they are. What reshapes a tile keeps its group; the rest only open tabs. The host's actions are free.
-	pub fn kept(&self, before: &PackedGrid, after: &PackedGrid, resizing: bool) -> bool {
-		let groups = |g: &PackedGrid| {
-			let tiles = g.cells.iter().map(|c| (c.group.id, (false, c.group.tabs.clone())));
-			tiles.chain(g.floats.iter().map(|f| (f.group.id, (true, f.group.tabs.clone())))).collect::<HashMap<_, _>>()
-		};
+	/// Whether this, done to a locked dock showing `before`, left what the lock holds: which tiles exist, and
+	/// where and how large they are. The host's actions are free, and a tab may open.
+	pub fn kept(&self, before: &PackedGrid, after: &PackedGrid) -> bool {
 		let shape = |g: &PackedGrid| {
 			let mut g = g.clone();
 			g.cells
@@ -143,26 +139,17 @@ impl Action {
 				.for_each(|g| g.active = 0);
 			g
 		};
-		let opened = |g: &PackedGrid| g.cells.iter().filter(|c| c.collapsed.is_none()).count();
 		match self {
-			Action::Measure { .. } | Action::Place { .. } | Action::Float { .. } | Action::Toggle { .. } | Action::AddTab { .. } | Action::SetMins { .. } => true,
+			// locking ends a resize in flight, which settles
+			Action::Measure { .. } | Action::Place { .. } | Action::Float { .. } | Action::Toggle { .. } | Action::AddTab { .. } | Action::SetMins { .. } | Action::Lock => true,
 			Action::Resize { .. }
-			| Action::Key {
-				aim: Aim::Builtin(Builtin::Collapse),
-				..
-			} => groups(before) == groups(after),
-			// a click on a spine opens it
-			Action::Drag { .. } if opened(after) == opened(before) + 1 => groups(before) == groups(after),
-			// a key mid-resize is checked by moving the grip on
-			Action::Key { .. } if resizing => groups(before) == groups(after),
-			Action::Key { .. }
+			| Action::Key { .. }
 			| Action::Drag { .. }
 			| Action::Carry { .. }
 			| Action::DragEnterTab { .. }
 			| Action::Focus { .. }
 			| Action::SaveLoad
-			| Action::Scroll { .. }
-			| Action::Lock => shape(before) == shape(after),
+			| Action::Scroll { .. } => shape(before) == shape(after),
 		}
 	}
 }
@@ -301,8 +288,11 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 		Action::Lock => {
 			world.locked = !world.locked;
 			let before = world.state.grid().clone();
+			let held = world.state.resizing().is_some();
 			world.state.set_locked(world.locked);
-			if world.state.grid() != &before {
+			if held {
+				world.structural_edit();
+			} else if world.state.grid() != &before {
 				return Err("locking or unlocking changed the layout".to_string());
 			}
 		}
@@ -721,7 +711,7 @@ fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool,
 }
 
 /// One whole pointer gesture, plus the three invariants that only exist around it: a press never
-/// touches the model, a cancel is a no-op, and an unarmed release is a click: it activates a tab, or opens a spine.
+/// touches the model, a cancel is a no-op, and an unarmed release is a click: it activates a tab.
 fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	let titles = HashMap::new();
 	let before = world.state.grid().clone();
@@ -738,7 +728,6 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 	if world.state.grid() != &before {
 		return Err("a press mutated the layout".to_string());
 	}
-	let took = world.state.dragging(); // a press mid-resize is refused
 	if let Grab::Tile { gid, .. } = grab
 		&& before.floats.iter().any(|f| f.group.id == *gid)
 	{
@@ -770,21 +759,9 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 		};
 	}
 
-	let pressed = match grab {
-		Grab::Tile { gid, .. } => *gid,
-		Grab::Tab { from, .. } => *from,
-	};
-	let spine = took && world.state.frames(&titles).iter().any(|f| f.gid == pressed && f.collapsed);
 	world.structural_edit();
 	world.state.drag_release();
-	if !armed && spine {
-		// Opening is `collapse`'s own edit, which the oracle checks as any other layout; the click's part is that it opened, and only reshaped.
-		let tabs = |g: &PackedGrid| g.cells.iter().map(|c| (c.group.id, c.group.tabs.clone())).collect::<HashMap<_, _>>();
-		let now = world.state.grid();
-		if now.cells.iter().any(|c| c.group.id == pressed && c.collapsed.is_some()) || tabs(now) != tabs(&before) {
-			return Err(format!("a click on spine {pressed:?} didn't just open it: {:?} vs {:?}", now.cells, before.cells));
-		}
-	} else if !armed {
+	if !armed {
 		// A press that never armed is a click: at most it activates the tab it landed on.
 		let mut expect = before.clone();
 		for (e, a) in expect.cells.iter_mut().zip(&world.state.grid().cells) {

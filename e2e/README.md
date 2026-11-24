@@ -18,8 +18,8 @@ before.
   `fixme`: its drag never arms (moves go to the pressed header, not the capture surface).
 - `chrome.spec.mjs` — the header is the framework's: the host's added buttons come before `? + ⧉ ✕`,
   a tab's `×` closes it alone (no drag starts) and the header's `✕` the whole tile, a locked dock
-  (insilico's top-bar lock) shows no close, float or `+` and doesn't drag until unlocked, and a collapsed tile is a spine as wide
-  as the title bar is tall, which a click opens back to the width it kept.
+  (insilico's top-bar lock) shows no close, float, `+` or grip and doesn't drag until unlocked, and the maximize key takes the
+  hovered tile.
 - `float.spec.mjs` — `⧉` lifts a tile into the float layer with every content node kept, the grid
   filling in; a float stays put while the dock scrolls; its header moves it, `⊟` docks it, dragging its
   tab onto a header joins that tile; a host opens one straight into the layer.

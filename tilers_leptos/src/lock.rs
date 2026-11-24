@@ -6,8 +6,8 @@ use leptos::{context::Provider, prelude::*};
 use tilers_core::CSS;
 
 /// The area a lock governs: every [`PackedArea`](crate::PackedArea) inside it, nested docks included, is
-/// locked while `locked` or an outer scope's is. A locked dock's user can't change which tiles exist or
-/// where they are; resizing, collapsing and maximizing stay open, and the host's calls still act.
+/// locked while `locked` or an outer scope's is. A locked dock's user can't change which tiles exist, or
+/// where or how large they are; maximizing stays open, and the host's calls still act.
 #[component]
 pub fn LockScope(locked: RwSignal<bool>, children: Children) -> impl IntoView {
 	let scope = Scope {

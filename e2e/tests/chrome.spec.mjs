@@ -13,7 +13,7 @@ const tileOf = (page, prefix) => page.locator(`.tl-tile:has(.tl-tab[data-panel^=
 
 test("the host's buttons come first, the framework's always follow", async ({ page }) => {
 	const titles = await page.locator('.tl-tile').first().locator('.tl-actions button').evaluateAll((els) => els.map((e) => e.title))
-	expect(titles).toEqual(['Maximize', 'Collapse', 'Keybinds', 'Add a tab', 'Float', 'Close'])
+	expect(titles).toEqual(['Maximize', 'Keybinds', 'Add a tab', 'Float', 'Close'])
 })
 
 test("a tab's × closes that tab alone, the header's ✕ the whole tile", async ({ page }) => {
@@ -35,12 +35,13 @@ test("a tab's × closes that tab alone, the header's ✕ the whole tile", async 
 	await expect(page.locator('.tl-tile')).toHaveCount(count - 1)
 })
 
-test('a locked dock shows no close, float, add or drag, and stays put until unlocked', async ({ page }) => {
+test('a locked dock shows no close, float, add, grip or drag, and stays put until unlocked', async ({ page }) => {
 	const lock = page.locator('.tl-lock')
 	await expect(lock).toHaveAttribute('aria-pressed', 'false')
 	await lock.click()
 	await expect(lock).toHaveAttribute('aria-pressed', 'true')
 	await expect(page.locator('.tl-tab-close')).toHaveCount(0)
+	await expect(page.locator('.tl-resize-handle, .tl-resize-right, .tl-resize-bottom'), 'no grips').toHaveCount(0)
 	for (const title of ['Float', 'Close', 'Add a tab']) await expect(page.locator(`.tl-actions [title="${title}"]`)).toHaveCount(0)
 	const tile = tileOf(page, 'console')
 	await expect(tile.locator('.tl-actions [title="Keybinds"]'), 'the rest of the header stays').toHaveCount(1)
@@ -57,24 +58,20 @@ test('a locked dock shows no close, float, add or drag, and stays put until unlo
 	await expect(tile.locator('.tl-actions [title="Close"]')).toHaveCount(1)
 })
 
-test('a collapsed tile is a spine as wide as the title bar is tall, and a click opens it', async ({ page }) => {
-	const tile = page.locator('.tl-tile').first()
-	const panel = await tile.locator('.tl-tab.tl-active').getAttribute('data-panel')
-	const open = await tile.boundingBox()
-	const titleH = (await tile.locator('.tl-header').boundingBox()).height
-	const step = await page.evaluate(() => document.querySelector('.tl-packed').clientWidth / 64)
-
-	await tile.locator('.tl-actions [title="Collapse"]').click()
-	const spine = page.locator(`.tl-tile.tl-collapsed:has(.tl-tab[data-panel="${panel}"])`)
-	await expect(spine).toHaveCount(1)
-	const box = await spine.boundingBox()
-	expect(box.width, 'the spine fits the title bar on its side').toBeGreaterThanOrEqual(titleH - 1)
-	expect(box.width, 'and no more than a step past it').toBeLessThan(titleH + step + 2)
-	expect(box.height, 'a spine keeps its height').toBeCloseTo(open.height, 0)
-
-	const tab = await spine.locator('.tl-tab').boundingBox()
-	await page.mouse.click(tab.x + tab.width / 2, tab.y + 8)
-	const reopened = page.locator(`.tl-tile:has(.tl-tab[data-panel="${panel}"])`)
-	await expect(reopened).not.toHaveClass(/tl-collapsed/)
-	expect((await reopened.boundingBox()).width, 'it opens to the width it kept').toBeCloseTo(open.width, 0)
+test('the maximize key takes the hovered tile, not the one last pressed', async ({ page }) => {
+	const shown = () => page.locator('.tl-tab.tl-active').evaluateAll((els) => els.map((e) => e.dataset.panel.split('-')[0]))
+	const all = (await shown()).length
+	const trades = page.locator('.tl-render-overlay[data-tile]').nth(3)
+	await tileOf(page, 'chart').locator('.tl-tab').click()
+	await trades.hover()
+	await page.keyboard.press('Alt+z')
+	await page.keyboard.press('f')
+	expect(await shown()).toEqual(['trades'])
+	await page.keyboard.press('Alt+z')
+	await page.keyboard.press('f')
+	expect((await shown()).length).toBe(all)
+	await page.mouse.move(400, 10) // the host's bar: over no tile
+	await page.keyboard.press('Alt+z')
+	await page.keyboard.press('f')
+	expect(await shown()).toEqual(['trades'])
 })

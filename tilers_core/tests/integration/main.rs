@@ -11,7 +11,6 @@
 
 mod actions;
 mod carry;
-mod collapse;
 mod fill;
 mod float;
 mod keys;
@@ -19,6 +18,7 @@ mod locked;
 mod mins;
 mod oracle;
 mod sim;
+mod tabs;
 
 use v_utils::fuzz::{Suite, Target};
 

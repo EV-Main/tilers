@@ -22,6 +22,6 @@ pub use model::{
 	Group, GroupId, PanelId,
 	packed::{Floating, MinSize, PackedGrid, Step},
 };
-#[cfg(target_arch = "wasm32")]
-pub use state::framed;
 pub use state::{ContentSlot, Frame, Ghost, Grip, Notice, PackedState};
+#[cfg(target_arch = "wasm32")]
+pub use state::{framed, tile_at};

@@ -71,12 +71,6 @@ impl PackedApi {
 		self.state.write().maximize(group);
 	}
 
-	/// Toggle `group` between its tile and a spine as wide as the title bar is tall, which keeps the
-	/// width it opens back to. A click on a spine opens it too.
-	pub fn collapse(&mut self, group: GroupId) {
-		self.state.write().collapse(group);
-	}
-
 	pub fn resize(&mut self, idx: usize, new_w: u32, new_h: u32) {
 		self.state.write().resize(idx, new_w, new_h);
 	}
@@ -219,13 +213,28 @@ pub fn PackedArea(
 			.expect("add dragend listener");
 		// Capture phase, so of nested docks the innermost claims last, and a tile's own `stopPropagation` can't skip it.
 		let press = Closure::<dyn FnMut()>::new(move || state.peek().claim_keys());
-		std::rc::Rc::new((key, blur, dragend, press))
+		// Capture phase, so of nested docks the innermost's tile is the one hovered last.
+		let over = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+			if let Some(tile) = tilers_core::tile_at(&e) {
+				let maximize = move || {
+					let mut state = state;
+					let mut s = state.write();
+					s.claim_keys();
+					s.focus(tile);
+					s.maximize(tile);
+				};
+				state.peek().hover(Some((tile, std::rc::Rc::new(maximize))));
+			}
+		});
+		let out = Closure::<dyn FnMut()>::new(move || state.peek().hover(None));
+		std::rc::Rc::new((key, blur, dragend, press, over, out))
 	});
 	#[cfg(target_arch = "wasm32")]
-	let press = listeners.clone();
+	let listening = listeners.clone();
 	#[cfg(target_arch = "wasm32")]
 	use_drop(move || {
 		use wasm_bindgen::JsCast;
+		state.peek().hover(None);
 		let window = web_sys::window().expect("a browser window");
 		window
 			.remove_event_listener_with_callback_and_bool("keydown", listeners.0.as_ref().unchecked_ref(), true)
@@ -335,7 +344,6 @@ pub fn PackedArea(
 		let class = [
 			Some("tl-tile"),
 			frame.shadow.then_some("tl-shadow"),
-			frame.collapsed.then_some("tl-collapsed"),
 			frame.floating.then_some("tl-float"),
 			frame.locked.then_some("tl-locked"),
 		]
@@ -344,7 +352,7 @@ pub fn PackedArea(
 		.collect::<Vec<_>>()
 		.join(" ");
 		rsx! {
-			div { key: "{gid.0}", class, style: "{frame.style}",
+			div { key: "{gid.0}", class, style: "{frame.style}", "data-tile": "{gid.0}",
 				if !frame.shadow {
 					div { class: "tl-group",
 						div {
@@ -408,7 +416,6 @@ pub fn PackedArea(
 												group: gid,
 												active: frame.tabs.iter().find(|t| t.active).expect("a tile shows one active tab").id.clone(),
 												maximized: frame.maximized,
-												collapsed: frame.collapsed,
 												floating: frame.floating,
 												api,
 											})
@@ -470,8 +477,12 @@ pub fn PackedArea(
 					use dioxus::web::WebEventExt;
 					use wasm_bindgen::JsCast;
 					let el = e.data().as_web_event();
-					el.add_event_listener_with_callback_and_bool("pointerdown", press.3.as_ref().unchecked_ref(), true)
+					el.add_event_listener_with_callback_and_bool("pointerdown", listening.3.as_ref().unchecked_ref(), true)
 						.expect("add pointerdown listener");
+					el.add_event_listener_with_callback_and_bool("pointerover", listening.4.as_ref().unchecked_ref(), true)
+						.expect("add pointerover listener");
+					el.add_event_listener_with_callback("pointerleave", listening.5.as_ref().unchecked_ref())
+						.expect("add pointerleave listener");
 					state.write().set_root(el.clone());
 					measure(&el, state, api, on_band);
 					root.set(Some(el));
@@ -531,6 +542,7 @@ pub fn PackedArea(
 					div {
 						key: "{panel.id.0}",
 						class: "tl-render-overlay",
+						"data-tile": content.get(&panel.id).map(|s| s.group.0.to_string()),
 						style: content.get(&panel.id).map(|s| s.style.clone()).unwrap_or_else(|| "display:none;".to_string()),
 						// Clicking a pane's body focuses it too (not just its header/tab), so pane keybinds act
 						// on whichever pane you last interacted with.
@@ -578,7 +590,7 @@ pub fn PackedArea(
 			}
 			if let Some(g) = ghost {
 				div {
-					class: if g.collapsed { "tl-ghost tl-collapsed" } else { "tl-ghost" },
+					class: "tl-ghost",
 					style: "left:{g.left}px; top:{g.top}px; width:{g.w}px; height:{g.h}px;",
 					div { class: "tl-header",
 						for t in g.tabs.iter() {
@@ -632,8 +644,6 @@ pub struct Tile {
 	/// The panel its strip shows.
 	pub active: PanelId,
 	pub maximized: bool,
-	/// Showing as a spine.
-	pub collapsed: bool,
 	/// Above the grid.
 	pub floating: bool,
 	pub api: PackedApi,

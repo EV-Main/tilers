@@ -6,10 +6,9 @@
 use crate::model::packed::PackedGrid;
 
 /// Bump when the on-disk shape changes; `load` would migrate older payloads. v2: cell floors are
-/// derived, so v1's stored `min_w`/`min_h` are ignored on load. v3: a cell may be collapsed, which
-/// a v2 reader would open at the spine's width, losing the width it keeps. v4: groups may float above
-/// the grid, which a v3 reader would drop.
-pub const SCHEMA_VERSION: u32 = 4;
+/// derived, so v1's stored `min_w`/`min_h` are ignored on load. v4: groups may float above
+/// the grid, which a v3 reader would drop. v5: a cell's `w` is its width, where v3 and v4 may hold it in `collapsed`.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Versioned wrapper actually written to storage.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -33,7 +32,11 @@ pub fn load(json: &str) -> Result<PackedGrid, LoadError> {
 	if serialized.version > SCHEMA_VERSION {
 		return Err(LoadError::FutureVersion(serialized.version));
 	}
-	Ok(serialized.grid)
+	let mut grid = serialized.grid;
+	if serialized.version < 5 {
+		widen(&mut grid, json)?;
+	}
+	Ok(grid)
 }
 
 #[derive(Debug)]
@@ -41,6 +44,35 @@ pub enum LoadError {
 	Parse(serde_json::Error),
 	/// Payload is newer than this build understands.
 	FutureVersion(u32),
+}
+
+/// Give each cell the width `collapsed` holds for it, what lies right of it moving over.
+fn widen(grid: &mut PackedGrid, json: &str) -> Result<(), LoadError> {
+	#[derive(serde::Deserialize)]
+	struct Payload {
+		grid: Grid,
+	}
+	#[derive(serde::Deserialize)]
+	struct Grid {
+		cells: Vec<Held>,
+	}
+	#[derive(serde::Deserialize)]
+	struct Held {
+		collapsed: Option<u32>,
+	}
+	let payload: Payload = serde_json::from_str(json).map_err(LoadError::Parse)?;
+	for (i, held) in payload.grid.cells.into_iter().enumerate() {
+		let Some(w) = held.collapsed else { continue };
+		let c = &mut grid.cells[i];
+		let (edge, by) = (c.x + c.w, w.saturating_sub(c.w));
+		c.w += by;
+		c.desired_w = None;
+		for o in grid.cells.iter_mut().filter(|o| o.x >= edge) {
+			o.x += by;
+			o.desired_x = None;
+		}
+	}
+	Ok(())
 }
 
 #[cfg(test)]
@@ -57,7 +89,6 @@ mod tests {
 		let gid = g.mint_group_id();
 		g.place(Group::new(gid, PanelId("b".into())), 2, 4, (1, 1), 6);
 		g.add_tab(GroupId(0), PanelId("c".into()));
-		g.cells[1].collapsed = Some(4);
 		let gid = g.mint_group_id();
 		g.place(Group::new(gid, PanelId("d".into())), 2, 2, (1, 1), 6);
 		g.lift(gid, 1, 1);
@@ -87,6 +118,17 @@ mod tests {
 		let g = load(v1).expect("a v1 payload loads");
 		let c = &g.cells[0];
 		assert_eq!((c.x, c.y, c.w, c.h, c.min_w, c.min_h, c.desired_h), (0, 0, 3, 2, 0, 0, None));
+	}
+
+	#[test]
+	fn v4_opens_its_collapsed_cells() {
+		let cell =
+			|id: u64, x: u32, w: u32, collapsed: &str| format!(r#"{{"group":{{"id":{id},"tabs":["p{id}"],"active":0}},"x":{x},"y":0,"w":{w},"h":24,"rank":{id},"collapsed":{collapsed}}}"#);
+		let cells = [cell(0, 0, 8, "null"), cell(1, 8, 1, "8"), cell(2, 9, 8, "null"), cell(3, 17, 1, "8")].join(",");
+		let v4 = format!(r#"{{"version":4,"grid":{{"cells":[{cells}],"state":"Settled","next_group_id":4}}}}"#);
+		let g = load(&v4).expect("a v4 payload loads");
+		assert_eq!(g.cells.iter().map(|c| (c.x, c.w)).collect::<Vec<_>>(), [(0, 8), (8, 8), (16, 8), (24, 8)]);
+		g.assert_packed();
 	}
 
 	#[test]

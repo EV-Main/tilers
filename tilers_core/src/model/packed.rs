@@ -65,13 +65,10 @@ pub struct Cell {
 	pub desired_h: Option<u32>,
 	/// Vertical stacking order, fixed at the last structural edit (see
 	/// `reassign_ranks`). [`refit`](PackedGrid::refit) settles by this,
-	/// not by the transient `y`, so collapsing tiles into a narrow band and back reproduces their
+	/// not by the transient `y`, so squeezing tiles into a narrow band and back reproduces their
 	/// exact order — a path-independent anchor the live `y` can't provide.
 	#[serde(default)]
 	pub rank: u32,
-	/// Collapsed to a spine, holding the width it opens back to. The spine's width is derived, as a floor is.
-	#[serde(default)]
-	pub collapsed: Option<u32>,
 }
 
 /// Whether a resize gesture is in flight: undo capture waits for it to end. The grid stays packed
@@ -139,7 +136,6 @@ impl PackedGrid {
 			desired_x: None,
 			desired_h: (eff_h != h).then_some(h),
 			rank: 0,
-			collapsed: None,
 		});
 		self.reassign_ranks();
 		debug_assert!(self.overlaps().is_none(), "place produced an overlap");
@@ -195,7 +191,7 @@ impl PackedGrid {
 	/// exactly, making a measure round-trip a no-op.
 	pub fn refit(&mut self, cols: u32) {
 		for c in &mut self.cells {
-			let want_w = if c.collapsed.is_some() { c.min_w } else { c.desired_w.unwrap_or(c.w) }; // a spine is its floor
+			let want_w = c.desired_w.unwrap_or(c.w);
 			let want_x = c.desired_x.unwrap_or(c.x);
 			let want_h = c.desired_h.unwrap_or(c.h);
 			// The floor is capped by the view: a min wider than `cols` fills it rather than spilling.
@@ -283,8 +279,7 @@ impl PackedGrid {
 		}
 	}
 
-	/// Lift tile `id` out of the grid to float at `(x, y)` of the view, at the width it opens to; the
-	/// grid settles into the space it left.
+	/// Lift tile `id` out of the grid to float at `(x, y)` of the view; the grid settles into the space it left.
 	pub fn lift(&mut self, id: GroupId, x: u32, y: u32) {
 		let c = self.cells.remove(self.locate(id).expect("lift: group is a tile"));
 		gravity(&mut self.cells, None);
@@ -293,7 +288,7 @@ impl PackedGrid {
 			group: c.group,
 			x,
 			y,
-			w: c.collapsed.unwrap_or(c.w),
+			w: c.w,
 			h: c.h,
 			min_w: c.min_w,
 			min_h: c.min_h,
@@ -339,8 +334,7 @@ impl PackedGrid {
 						if self.cells[self.locate(*from).expect("drag source group exists")].group.tabs.len() > 1);
 				// Header ⇒ join; body ⇒ shadow at the row below this tile (so it stays put), but at
 				// the block's own column — the x tracks the dragged block as it does in open space.
-				// A collapsed tile is all header: its spine is the strip turned on its side.
-				return if (my < t + chrome || c.collapsed.is_some()) && !self_no_join {
+				return if my < t + chrome && !self_no_join {
 					// Default to append; the render layer refines `index` from the live tab geometry.
 					DropTarget::Tab {
 						group: c.group.id,
@@ -380,34 +374,33 @@ impl PackedGrid {
 			}
 		}
 		let floating = self.floats.iter().position(|f| f.group.id == source.group());
-		let (group, w, h, min_w, min_h, collapsed) = match (source, floating) {
+		let (group, w, h, min_w, min_h) = match (source, floating) {
 			(DragSource::Tile(_), Some(i)) => {
 				let f = self.floats.remove(i);
-				(f.group, f.w, f.h, f.min_w, f.min_h, None)
+				(f.group, f.w, f.h, f.min_w, f.min_h)
 			}
 			(DragSource::Tab { panel, .. }, Some(i)) => {
 				let (w, h, min_w, min_h) = (self.floats[i].w, self.floats[i].h, self.floats[i].min_w, self.floats[i].min_h);
 				if self.floats[i].group.remove_tab(&panel) {
 					self.floats.remove(i);
 				}
-				(Group::new(self.mint_group_id(), panel), w, h, min_w, min_h, None)
+				(Group::new(self.mint_group_id(), panel), w, h, min_w, min_h)
 			}
 			(DragSource::Tile(g), None) => {
 				let idx = self.locate(g).expect("drop: source tile exists");
 				let c = self.cells.remove(idx);
-				(c.group, c.w, c.h, c.min_w, c.min_h, c.collapsed)
+				(c.group, c.w, c.h, c.min_w, c.min_h)
 			}
 			(DragSource::Tab { panel, from }, None) => {
 				let idx = self.locate(from).expect("drop: source group exists");
-				// A tab torn from a spine opens at the width the spine keeps.
 				let (w, h, min_w, min_h) = {
 					let c = &self.cells[idx];
-					(c.collapsed.unwrap_or(c.w), c.h, c.min_w, c.min_h)
+					(c.w, c.h, c.min_w, c.min_h)
 				};
 				if self.cells[idx].group.remove_tab(&panel) {
 					self.cells.remove(idx);
 				}
-				(Group::new(self.mint_group_id(), panel), w, h, min_w, min_h, None)
+				(Group::new(self.mint_group_id(), panel), w, h, min_w, min_h)
 			}
 		};
 		// Keep width bound to the view: a tile re-homed near the right edge clamps left rather
@@ -434,7 +427,6 @@ impl PackedGrid {
 					desired_x: None,
 					desired_h: None,
 					rank: 0,
-					collapsed,
 				});
 				let pin = self.cells.len() - 1;
 				gravity(&mut self.cells, Some(pin));
@@ -454,7 +446,6 @@ impl PackedGrid {
 					desired_x: None,
 					desired_h: None,
 					rank: 0,
-					collapsed,
 				});
 				gravity(&mut self.cells, None);
 			}
@@ -609,7 +600,6 @@ mod tests {
 			desired_x: None,
 			desired_h: None,
 			rank: 0,
-			collapsed: None,
 		}
 	}
 

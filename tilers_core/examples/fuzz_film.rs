@@ -55,7 +55,7 @@ const C_FG: &str = "#ddd";
 /// `--tl-shadow-bg` is `rgba(160,160,160,0.18)`; flattened over the tile bg so the landing cell is
 /// legible at film scale.
 const C_SHADOW: &str = "#3d3d3d";
-const BUCKETS: [&str; 39] = [
+const BUCKETS: [&str; 38] = [
 	"Measure",
 	"Place",
 	"AddTab",
@@ -92,7 +92,6 @@ const BUCKETS: [&str; 39] = [
 	"Carry",
 	"Float",
 	"Toggle",
-	"key Collapse",
 	"key Float",
 	"Lock",
 ];
@@ -205,7 +204,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 			A::Carry { .. } => 33,
 			A::Float { .. } => 34,
 			A::Toggle { .. } => 35,
-			A::Lock => 38,
+			A::Lock => 37,
 		};
 	if let A::Drag { grab, commit, .. } = action {
 		m |= 1 << if world.resolved.is_empty() { 10 } else { 9 };
@@ -236,8 +235,7 @@ fn hit(action: &actions::Action, world: &sim::World) -> u64 {
 				Aim::Builtin(B::Cache) => 24,
 				Aim::Builtin(B::Publish) => 25,
 				Aim::Escape => 26,
-				Aim::Builtin(B::Collapse) => 36,
-				Aim::Builtin(B::Float) => 37,
+				Aim::Builtin(B::Float) => 36,
 				Aim::Builtin(b) => unreachable!("{b:?} has no bucket"),
 			};
 		if actions::noisy(inputs) {

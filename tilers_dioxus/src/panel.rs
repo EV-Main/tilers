@@ -13,9 +13,7 @@ use tilers_core::{MinSize, PanelId};
 ///
 /// `label` is what its tab shows, `title` when `None`; the drag ghost and the help name it by `title`.
 /// A press on a control in it (a button, a link, a field) is the control's, never the tab's. The tab's
-/// close is the framework's, after the label. A spine's tabs fill it, so a label is where a host's drop
-/// along a collapsed tile lands.
-///
+/// close is the framework's, after the label.///
 /// `content` is an eagerly-built `VNode`; that is fine because the overlay diffs by key, not by
 /// tree position. If lazy construction is ever needed, swap to `Callback<PanelId, Element>` — the
 /// overlay's keying contract stays identical.

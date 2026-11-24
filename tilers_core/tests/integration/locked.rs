@@ -1,5 +1,5 @@
-//! A locked dock holds its user: no tile moves, tears, closes, floats, docks or lands from a carry, and
-//! undo waits. Resizing, collapsing, maximizing and opening tabs stay open, and the host keeps every power.
+//! A locked dock holds its user: no tile moves, resizes, tears, closes, floats, docks or lands from a carry,
+//! and undo waits. Maximizing and opening tabs stay open, and the host keeps every power.
 
 use std::collections::HashMap;
 
@@ -44,7 +44,7 @@ fn keys(s: &mut PackedState, key: &str) {
 	}
 }
 
-/// Every gesture that would change which tiles exist or where they are.
+/// Every gesture that would change which tiles exist, or where or how large they are.
 fn rearrange(s: &mut PackedState, a: GroupId, b: GroupId, d: GroupId) {
 	let drag = |s: &mut PackedState, to: (f64, f64)| {
 		s.drag_move((to.0 - 10.0, to.1));
@@ -67,6 +67,12 @@ fn rearrange(s: &mut PackedState, a: GroupId, b: GroupId, d: GroupId) {
 		assert!(!s.carrying(), "a drop stays the content's");
 		drag(s, (1200.0, 600.0));
 	}
+	for (gid, at) in [(a, (800.0, 100.0)), (d, (900.0, 480.0))] {
+		s.resize_start(gid, Grip::Right, at.0, at.1);
+		s.resize_move((at.0 - 200.0, at.1));
+		assert!(s.resizing().is_none(), "no grip takes hold");
+		s.resize_end();
+	}
 	for key in ["Backspace", "z"] {
 		for gid in [a, b, d] {
 			s.focus(gid);
@@ -86,7 +92,7 @@ fn a_locked_dock_is_where_it_was() {
 	s.set_locked(true);
 	rearrange(&mut s, a, b, d);
 	assert_eq!(s.grid(), &before);
-	assert!(s.frames(&HashMap::new()).iter().all(|f| f.locked), "what a binding hides");
+	assert!(s.frames(&HashMap::new()).iter().all(|f| f.locked && f.grips.is_empty()), "what a binding hides");
 }
 
 #[test]
@@ -105,20 +111,21 @@ fn locking_drops_the_drag_in_flight() {
 }
 
 #[test]
-fn resize_collapse_and_maximize_stay_open() {
-	let (mut s, a, b, _) = seeded();
-	s.set_locked(true);
-	let w = s.grid().cells[0].w;
+fn locking_ends_the_resize_in_flight_where_it_is() {
+	let (mut s, a, ..) = seeded();
 	s.resize_start(a, Grip::Right, 800.0, 100.0);
 	s.resize_move((600.0, 100.0));
-	s.resize_end();
-	assert!(s.grid().cells[0].w < w, "the grip resizes it");
-	let spine = |s: &PackedState| s.frames(&HashMap::new()).iter().find(|f| f.gid == a).expect("a renders").collapsed;
-	s.collapse(a);
-	assert!(spine(&s));
-	s.press_tile(a, (8.0, 200.0), (8.0, 200.0));
-	s.drag_release();
-	assert!(!spine(&s), "a click on a spine opens it");
+	let cells = s.grid().cells.clone();
+	s.set_locked(true);
+	s.resize_move((400.0, 100.0));
+	assert!(s.resizing().is_none());
+	assert_eq!(s.grid().cells.iter().map(|c| c.w).collect::<Vec<_>>(), cells.iter().map(|c| c.w).collect::<Vec<_>>());
+}
+
+#[test]
+fn maximizing_and_opening_a_tab_stay_open() {
+	let (mut s, a, b, _) = seeded();
+	s.set_locked(true);
 	s.focus(b);
 	keys(&mut s, "f");
 	assert_eq!(s.frames(&HashMap::new()).iter().filter(|f| f.maximized).map(|f| f.gid).collect::<Vec<_>>(), [b]);
@@ -150,7 +157,7 @@ fn unlocking_restores_the_gestures() {
 	let (mut s, a, b, _) = seeded();
 	s.set_locked(true);
 	s.set_locked(false);
-	assert!(s.frames(&HashMap::new()).iter().all(|f| !f.locked));
+	assert!(s.frames(&HashMap::new()).iter().all(|f| !f.locked && !f.grips.is_empty()));
 	s.press_tab(id("c"), a, (100.0, 8.0), (20.0, 8.0));
 	s.drag_move((110.0, 8.0));
 	s.drag_move((1300.0, 700.0));

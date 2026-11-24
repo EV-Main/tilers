@@ -91,7 +91,7 @@ impl World {
 	}
 
 	/// Px per grid step at the least row, the same `(width / cols, row_h_rem)` [`PackedState::set_measure`]
-	/// derives — what a spine and a float's floor resolve at.
+	/// derives — what a float's floor resolves at.
 	pub fn step_px(&self) -> (f64, f64) {
 		let row = self.cfg.row_h_rem * 16.0; // a native root font is 16px
 		(if self.cfg.scroll_x { row } else { self.size.0 / self.state.cols() as f64 }, row)
@@ -243,11 +243,11 @@ pub fn run(seed: u64, size: usize, verbose: bool, observe: &mut dyn FnMut(Option
 		if verbose {
 			eprintln!("step {step} (cols={}, {}x{}): {action:?}", world.state.cols(), world.size.0, world.size.1);
 		}
-		let (before, held) = (world.state.grid().clone(), world.state.resizing().is_some());
+		let before = world.state.grid().clone();
 		if let Err(what) = actions::apply(&action, &mut world, &mut |w| observe(Some(&action), w)) {
 			return Err(Failure { step, what });
 		}
-		if world.locked && !action.kept(&before, world.state.grid(), held) {
+		if world.locked && !action.kept(&before, world.state.grid()) {
 			return Err(Failure {
 				step,
 				what: format!("a locked dock let the user rearrange it: {before:?} → {:?}", world.state.grid()),
