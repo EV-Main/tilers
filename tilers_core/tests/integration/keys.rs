@@ -4,7 +4,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use tilers_core::{
-	Config, Grip, Group, GroupId, MinSize, PackedState, PanelId, Step,
+	Config, Declared, Grip, Group, GroupId, MinSize, PackedState, PanelId, Step,
 	keys::{Binding, Chord, Command, HelpRow, KeyInput, KeyOutcome, Keymap, Node},
 	model::packed::PackedGrid,
 };
@@ -52,8 +52,8 @@ fn edited(cfg: Config) -> (PackedState, PackedGrid) {
 
 fn seeded(cfg: Config) -> PackedState {
 	let mut s = PackedState::new(cfg);
-	let mins = (0..2).map(|i| (PanelId(format!("p{i}")), MinSize::Steps { w: Step(1), h: Step(1) })).collect();
-	s.set_mins(mins);
+	let min = MinSize::Steps { w: Step(1), h: Step(1) };
+	s.set_panels((0..2).map(|i| (PanelId(format!("p{i}")), Declared { min, locked: false })).collect());
 	s.set_measure((0.0, 0.0), (1600.0, 900.0), false);
 	assert_eq!(s.take_band(), Some(false), "first measure is a miss natively");
 	for i in 0..2 {
@@ -268,7 +268,8 @@ fn inspect_and_maximize_act_on_the_focused_pane() {
 #[test]
 fn undo_mid_resize_leaves_the_gesture_intact() {
 	let (mut s, _) = edited(Config::default());
-	s.resize_start(1, Grip::Corner, 500.0, 500.0);
+	let g = s.grid().cells[1].group.id;
+	s.resize_start(g, Grip::Corner, 500.0, 500.0);
 	s.resize_move((560.0, 540.0));
 	let mid = s.grid().clone();
 	for keys in ["Ctrl+z", "Alt+z u", "Alt+z Backspace"] {

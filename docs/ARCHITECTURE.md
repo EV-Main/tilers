@@ -40,7 +40,7 @@ flowchart LR
   `settle` (gravity toward the top, with the pinned tile claiming its row first),
   `resolve_target`/`drop`, `refit` for a column-count change, and `resized`, the one resize: an
   edge moves its own tile, pushing what it grows into. The no-overlap invariant lives here
-  (`assert_packed`).
+  (`assert_packed`). `floats` sit beside `cells`: groups above the grid, which `lift` makes and `drop` docks.
 - `model/group` — a tile's tab-group: many panels, one active.
 - `model/serial` — versioned JSON. `PackedGrid` *is* the serialized value; the schema
   tag is the seam for migrations, and `load` errors on a younger payload rather than
@@ -54,15 +54,17 @@ flowchart LR
 - `config` — `Config` (steps/row height/keymap/storage key/publish hook/`scroll_x`) and `Band`
   (3 widths: the persistence key and the column count).
 - `persist` — `localStorage` read/write, wasm-only (a native no-op), crate-internal.
-- `css` — the one structural stylesheet, every selector in `:where()` so a host's rule always wins;
-  colors and sizes are `--tl-*` custom properties.
+- `css` — the one stylesheet. Geometry is the framework's; a host themes colors and timing through `--tl-*`
+  custom properties, and nothing else.
 
 Bindings (`tilers_dioxus`, `tilers_leptos`) hold `PackedState` in one reactive
 cell, forward DOM events into it, render the view-model, and expose `PackedApi` — a cheap
 handle over that cell — to the host through `on_band`.
-A tile's chrome is split the same way: the binding renders the strip and owns its gestures (the empty
-area moves the tile, a tab drags out or joins), while what fills it is the host's — a panel's tab
-label, and per dock the header's actions. A press on a control inside a label is the control's.
+A tile's chrome is the framework's: the binding renders the strip and owns its gestures (the empty
+area moves the tile, a tab drags out or joins) and its management (a tab's `×`, `?`, `+`, float/dock,
+close). A host fills in content — a panel's tab label — and may *add* buttons before the framework's
+(`actions`); it takes management away only through a panel's `locked`. A press on a control inside a
+label or an added button is the control's.
 Tile drags are the reducer's own pointer gestures; a native drag (a host's card, a file) only opens
 a tab it enters (`drag_enter_tab`), and the drop stays the content's — unless the host declared it a
 carry (`carry`): then its `dragover`s drive the same `drag_move` → `resolve_target` → preview `drop`
@@ -114,6 +116,15 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   horizontal grip never changes a height: a tile's `y` moves only by settling.
 - The content overlay's render order is **independent of layout** — never reorder it, or
   instances remount and stateful panels (maps, scroll, focus) reset.
+- Floats are groups above the grid, never cells, so "cells never overlap" says nothing about them and
+  nothing about them reaches `pack`/`settle`/`refit`. A float's rect is in least steps from the *view's*
+  corner; its clamp into the view is derived at render, never stored, and a gesture on it holds the
+  view at its press. Its frame and content are sticky boxes in layers as large as the scrolled content,
+  so it stays put as the grid scrolls, and its content is the same overlay node it was as a tile.
+  Docking is the one `drop`, from where it shows. Its stacking order is overlay state (`stack`), not layout.
+- A panel's `locked` gates the user, never the host: no gesture or key closes it, moves its group, tears
+  its tab out or floats/docks it; resizing, collapsing, maximizing and joining stay open, and every
+  `PackedApi` call still acts.
 - `focused`/`maximized` are overlay state beside the grid, never cells; they are filtered
   through `live()` so a stale id is inert. `drag`/`resize` address cells, so anything that
   replaces them (`reset`, and hence the band latch, and `load`) must clear them too.

@@ -83,9 +83,27 @@ pub enum GridState {
 	Resizing,
 }
 
+/// A group floating above the grid: never a cell, so it overlaps tiles by design. Its rect is in
+/// steps from the *view's* top-left, at the least step; the clamp into the view is derived at render.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Floating {
+	pub group: Group,
+	pub x: u32,
+	pub y: u32,
+	pub w: u32,
+	pub h: u32,
+	/// Derived like a cell's floor, never layout.
+	#[serde(skip)]
+	pub min_w: u32,
+	#[serde(skip)]
+	pub min_h: u32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PackedGrid {
 	pub cells: Vec<Cell>,
+	#[serde(default)]
+	pub floats: Vec<Floating>,
 	pub state: GridState,
 	next_group_id: u64,
 }
@@ -214,6 +232,12 @@ impl PackedGrid {
 	/// under `gravity` — a freed column's tiles float up as far as they can, matching insilico's
 	/// pillar-removal.
 	pub fn close(&mut self, panel: &PanelId) {
+		if let Some(i) = self.floats.iter().position(|f| f.group.tabs.contains(panel)) {
+			if self.floats[i].group.remove_tab(panel) {
+				self.floats.remove(i);
+			}
+			return;
+		}
 		let idx = self.cells.iter().position(|c| c.group.tabs.contains(panel)).expect("close: panel is hosted");
 		if self.cells[idx].group.remove_tab(panel) {
 			self.cells.remove(idx);
@@ -259,10 +283,30 @@ impl PackedGrid {
 		}
 	}
 
+	/// Lift tile `id` out of the grid to float at `(x, y)` of the view, at the width it opens to; the
+	/// grid settles into the space it left.
+	pub fn lift(&mut self, id: GroupId, x: u32, y: u32) {
+		let c = self.cells.remove(self.locate(id).expect("lift: group is a tile"));
+		gravity(&mut self.cells, None);
+		self.reassign_ranks();
+		self.floats.push(Floating {
+			group: c.group,
+			x,
+			y,
+			w: c.collapsed.unwrap_or(c.w),
+			h: c.h,
+			min_w: c.min_w,
+			min_h: c.min_h,
+		});
+		debug_assert!(self.overlaps().is_none(), "lift left an overlap");
+	}
+
 	/// Open `panel` as a new tab in `id`'s group and activate it.
 	pub fn add_tab(&mut self, id: GroupId, panel: PanelId) {
-		let idx = self.locate(id).expect("add_tab: group exists");
-		let group = &mut self.cells[idx].group;
+		let group = match self.locate(id) {
+			Some(idx) => &mut self.cells[idx].group,
+			None => &mut self.floats.iter_mut().find(|f| f.group.id == id).expect("add_tab: group exists").group,
+		};
 		let at = group.tabs.len();
 		group.insert_tab(panel, at);
 	}
@@ -335,13 +379,25 @@ impl PackedGrid {
 				return;
 			}
 		}
-		let (group, w, h, min_w, min_h, collapsed) = match source {
-			DragSource::Tile(g) => {
+		let floating = self.floats.iter().position(|f| f.group.id == source.group());
+		let (group, w, h, min_w, min_h, collapsed) = match (source, floating) {
+			(DragSource::Tile(_), Some(i)) => {
+				let f = self.floats.remove(i);
+				(f.group, f.w, f.h, f.min_w, f.min_h, None)
+			}
+			(DragSource::Tab { panel, .. }, Some(i)) => {
+				let (w, h, min_w, min_h) = (self.floats[i].w, self.floats[i].h, self.floats[i].min_w, self.floats[i].min_h);
+				if self.floats[i].group.remove_tab(&panel) {
+					self.floats.remove(i);
+				}
+				(Group::new(self.mint_group_id(), panel), w, h, min_w, min_h, None)
+			}
+			(DragSource::Tile(g), None) => {
 				let idx = self.locate(g).expect("drop: source tile exists");
 				let c = self.cells.remove(idx);
 				(c.group, c.w, c.h, c.min_w, c.min_h, c.collapsed)
 			}
-			DragSource::Tab { panel, from } => {
+			(DragSource::Tab { panel, from }, None) => {
 				let idx = self.locate(from).expect("drop: source group exists");
 				// A tab torn from a spine opens at the width the spine keeps.
 				let (w, h, min_w, min_h) = {
@@ -418,7 +474,7 @@ pub enum DragSource {
 
 impl DragSource {
 	/// The group the source currently lives in — used to short-circuit a drop onto itself.
-	fn group(&self) -> GroupId {
+	pub(crate) fn group(&self) -> GroupId {
 		match self {
 			DragSource::Tile(g) => *g,
 			DragSource::Tab { from, .. } => *from,

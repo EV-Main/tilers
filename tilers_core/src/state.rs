@@ -21,7 +21,7 @@ use crate::{
 	keys::{Builtin, Command, Help, Hint, KeyInput, KeyOutcome},
 	model::{
 		Group, GroupId, PanelId,
-		packed::{DragSource, DropTarget, GridState, MinSize, PackedGrid},
+		packed::{DragSource, DropTarget, Floating, GridState, MinSize, PackedGrid},
 		serial,
 	},
 	persist,
@@ -32,8 +32,6 @@ use crate::{
 const REM_PX: f64 = 16.0;
 /// Columns a [`Config::scroll_x`] grid may run to: past any view, and few enough that packing a tile scans them all.
 const SCROLL_COLS: u32 = 1024;
-/// The space between tiles: each tile and its panels' slots are inset by half of it, so the grid stays unit-free.
-const GAP: &str = "var(--tl-gap, 0px)";
 /// A press promotes to a drag only past this many px, so a click still activates a tab.
 const DRAG_THRESHOLD: f64 = 4.0;
 /// Px per frame a held drag scrolls at past a scroller's edge; its edge band ramps up to it.
@@ -54,9 +52,9 @@ pub struct PackedState {
 	/// The document's actual root font size, re-read at every measure. Bridges rem ⇄ px for the
 	/// chrome height and a rem-expressed [`MinSize`].
 	rem_px: f64,
-	/// Every panel's declared min, mirrored from the binding's panel list. Host intent, not layout:
-	/// cell floors are re-derived from it ([`refloor`](Self::refloor)) whenever the step or a tile's tabs change.
-	mins: HashMap<PanelId, MinSize>,
+	/// Every panel's declaration, mirrored from the binding's panel list. Host intent, not layout:
+	/// floors are re-derived from it ([`refloor`](Self::refloor)) whenever the step or a tile's tabs change.
+	panels: HashMap<PanelId, Declared>,
 	band: Band,
 	drag: Option<Drag>,
 	resize: Option<ResizeStart>,
@@ -70,6 +68,8 @@ pub struct PackedState {
 	/// pure view toggle (no model mutation) — the focused tile fills the container, the rest hide.
 	focused: Option<GroupId>,
 	maximized: Option<GroupId>,
+	/// Floats in the order they were last pressed, topmost last: view state, so a raise is never an undo step.
+	stack: Vec<GroupId>,
 	help: bool,
 	popups: HashSet<GroupId>,
 	/// `cfg.keymap` resolved for this platform and config, and the scope a chord has opened in it.
@@ -106,7 +106,7 @@ impl PackedState {
 			cols,
 			step_px: (0.0, 0.0),
 			rem_px: REM_PX,
-			mins: HashMap::new(),
+			panels: HashMap::new(),
 			band: Band::default(),
 			drag: None,
 			resize: None,
@@ -116,6 +116,7 @@ impl PackedState {
 			framed: false,
 			focused: None,
 			maximized: None,
+			stack: Vec::new(),
 			help: false,
 			popups: HashSet::new(),
 			keys,
@@ -199,16 +200,101 @@ impl PackedState {
 
 	/// Close `panel`'s tab, and its tile with its last one. A tab gone since the click was queued is ignored.
 	pub fn close(&mut self, panel: &PanelId) {
-		if !self.base().cells.iter().any(|c| c.group.tabs.contains(panel)) {
+		let base = self.base();
+		if !base.cells.iter().map(|c| &c.group).chain(base.floats.iter().map(|f| &f.group)).any(|g| g.tabs.contains(panel)) {
 			return;
 		}
 		self.base().close(panel);
 		self.refloor();
 	}
 
+	/// Close every tab of `group`, and so the tile or float. One gone since the click was queued is ignored.
+	pub fn close_tile(&mut self, group: GroupId) {
+		let base = self.base();
+		let Some(g) = base.cells.iter().map(|c| &c.group).chain(base.floats.iter().map(|f| &f.group)).find(|g| g.id == group) else {
+			return;
+		};
+		for t in g.tabs.clone() {
+			self.close(&t);
+		}
+	}
+
 	/// Toggle `group` filling the view. A view override, never layout.
 	pub fn maximize(&mut self, group: GroupId) {
 		self.maximized = if self.maximized == Some(group) { None } else { Some(group) };
+	}
+
+	/// Open `group` floating above the grid at a wanted `w×h`, floored by its tabs' mins: centered in
+	/// the view, a step down-right of any float already there, on top and focused.
+	pub fn float(&mut self, group: Group, w: u32, h: u32) {
+		assert!(self.step_px.0 > 0.0, "float before the first measure: no step size yet");
+		let (min_w, min_h) = self.floor(&group.tabs);
+		let (vc, vr) = self.view();
+		let (w, h) = (w.max(min_w), h.max(min_h));
+		let (mut x, mut y) = (vc.saturating_sub(w).div_euclid(2), vr.saturating_sub(h).div_euclid(2));
+		let base = self.base();
+		while base.floats.iter().any(|f| (f.x, f.y) == (x, y)) {
+			(x, y) = (x + 1, y + 1);
+		}
+		let gid = group.id;
+		base.floats.push(Floating { group, x, y, w, h, min_w, min_h });
+		self.follow();
+		self.focus(gid);
+	}
+
+	/// Float tile `group` out where it shows, the grid settling into its space; or dock a float where
+	/// it shows, as a drag released with the float's header under the pointer would.
+	pub fn toggle_float(&mut self, group: GroupId) {
+		assert!(self.step_px.0 > 0.0, "toggle_float before the first measure: no step size yet");
+		// The gestures address the cells this replaces.
+		self.drag = None;
+		self.resize_end();
+		let ((sw0, sh0), (sw, sh), title) = (self.step_px, self.step(), self.title_h());
+		match self.grid.floats.iter().find(|f| f.group.id == group) {
+			Some(f) => {
+				let (x, y, w, h) = self.shown(f);
+				let (left, top) = (x as f64 * sw0 + self.scroll.0, y as f64 * sh0 + self.scroll.1);
+				let (cx, cy) = (left + w as f64 * sw0 / 2.0, top + h as f64 * sh0 / 2.0);
+				let source = DragSource::Tile(group);
+				let target = self.grid.resolve_target(&source, cx, cy, cx, top + title / 2.0, sw, sh, title, self.cols, w.min(self.cols), h);
+				self.grid.drop(source, target, self.cols);
+			}
+			None => {
+				let c = self.grid.cells.iter().find(|c| c.group.id == group).expect("toggle_float: group exists");
+				let at = |cell: u32, step: f64, scroll: f64, least: f64| ((cell as f64 * step - scroll) / least).round().max(0.0) as u32;
+				let (x, y) = (at(c.x, sw, self.scroll.0, sw0), at(c.y, sh, self.scroll.1, sh0));
+				self.grid.lift(group, x, y);
+				self.focus(group);
+			}
+		}
+		self.refloor();
+	}
+
+	/// The view's size in least steps, which a float's rect is in.
+	fn view(&self) -> (u32, u32) {
+		let fit = |len: f64, step: f64| ((len / step + 1e-9).floor() as u32).max(1);
+		(fit(self.root_size.0, self.step_px.0), fit(self.root_size.1, self.step_px.1))
+	}
+
+	/// Where float `f` shows: capped to the view, its floor winning, then pulled inside it. Derived, so a
+	/// view shrinking and growing back restores it exactly.
+	fn shown(&self, f: &Floating) -> (u32, u32, u32, u32) {
+		fit(f, self.view())
+	}
+
+	/// `gid`'s group, a tile's or a float's.
+	fn group(&self, gid: GroupId) -> Option<&Group> {
+		self.grid.cells.iter().map(|c| &c.group).chain(self.grid.floats.iter().map(|f| &f.group)).find(|g| g.id == gid)
+	}
+
+	/// Whether any of `tabs` is [`Declared::locked`].
+	fn locked(&self, tabs: &[PanelId]) -> bool {
+		tabs.iter().any(|p| {
+			self.panels
+				.get(p)
+				.unwrap_or_else(|| panic!("hosted panel {p:?} is undeclared: the binding's panels list every panel the layout hosts"))
+				.locked
+		})
 	}
 
 	/// Toggle `group` between its tile and a spine: the tile narrows to the spine, keeping the width it
@@ -217,7 +303,7 @@ impl PackedState {
 		assert!(self.step_px.0 > 0.0, "collapse before the first measure: no step size yet");
 		let (spine, cols) = (self.spine(), self.cols);
 		let base = self.base();
-		let idx = base.cells.iter().position(|c| c.group.id == group).expect("collapse: group exists");
+		let idx = base.cells.iter().position(|c| c.group.id == group).expect("collapse: group is a tile; a float has no spine");
 		let c = &mut base.cells[idx];
 		let right = match c.collapsed.take() {
 			Some(w) => c.x + w,
@@ -250,6 +336,33 @@ impl PackedState {
 	/// of (press layout, grip, cursor) whatever edits landed on that layout meanwhile.
 	fn follow(&mut self) {
 		let Some(r) = &self.resize else { return };
+		if let Some(i) = r.press.floats.iter().position(|f| f.group.id == r.gid) {
+			// The view at the press, as a tile's gesture holds its row: a view changing mid-gesture moves what shows, not the gesture.
+			let ((sw, sh), (vc, vr)) = (self.step_px, r.view);
+			let f = &r.press.floats[i];
+			let (x, y, w, h) = fit(f, r.view);
+			let d = |from: f64, to: f64, step: f64| ((to - from) / step).round() as i64;
+			let (dx, dy) = (d(r.press_at.0, r.cursor.0, sw), d(r.press_at.1, r.cursor.1, sh));
+			let (mw, mh, top) = (f.min_w.max(1) as i64, f.min_h.max(1) as i64, y as i64);
+			let (mut left, mut right, mut bottom) = (x as i64, (x + w) as i64, (y + h) as i64);
+			let (vc, vr) = (vc as i64, vr as i64);
+			// An edge moves the float's own rect only; the view holds it in and its floor holds it open.
+			match r.grip {
+				Grip::Left => left = (left + dx).min(right - mw).max(0),
+				Grip::Right => right = (right + dx).min(vc).max(left + mw),
+				Grip::Wall => right = (right + dx).min(right).max(left + mw),
+				Grip::Bottom => bottom = (bottom + dy).min(vr).max(top + mh),
+				Grip::Fold => bottom = (bottom + dy).min(bottom).max(top + mh),
+				Grip::Corner => (right, bottom) = ((right + dx).min(vc).max(left + mw), (bottom + dy).min(vr).max(top + mh)),
+			}
+			let mut g = r.press.clone();
+			let f = &mut g.floats[i];
+			(f.x, f.w, f.h) = (left as u32, (right - left) as u32, (bottom - top) as u32);
+			f.y = y;
+			g.state = GridState::Resizing;
+			self.grid = g;
+			return;
+		}
 		let Some(idx) = r.press.cells.iter().position(|c| c.group.id == r.gid) else {
 			// The grabbed tile was closed under the gesture: there is nothing left to resize.
 			self.grid = self.resize.take().expect("matched above").press;
@@ -276,9 +389,9 @@ impl PackedState {
 		self.grid.state = GridState::Resizing;
 	}
 
-	/// Replace every panel's declared min — the binding mirrors its panel list here on each change.
-	pub fn set_mins(&mut self, mins: HashMap<PanelId, MinSize>) {
-		self.mins = mins;
+	/// Replace every panel's declaration — the binding mirrors its panel list here on each change.
+	pub fn set_panels(&mut self, panels: HashMap<PanelId, Declared>) {
+		self.panels = panels;
 		self.refloor();
 	}
 
@@ -288,9 +401,10 @@ impl PackedState {
 		let (sw, sh) = self.step_px;
 		tabs.iter()
 			.map(|p| {
-				self.mins
+				self.panels
 					.get(p)
-					.unwrap_or_else(|| panic!("hosted panel {p:?} has no declared min: the binding's panels list every panel the layout hosts"))
+					.unwrap_or_else(|| panic!("hosted panel {p:?} is undeclared: the binding's panels list every panel the layout hosts"))
+					.min
 					.resolve(sw, sh, self.rem_px, self.title_h())
 			})
 			.fold((0, 0), |(w, h), (pw, ph)| (w.max(pw), h.max(ph)))
@@ -312,10 +426,14 @@ impl PackedState {
 				(if c.collapsed.is_some() { spine } else { w }, h)
 			})
 			.collect();
+		let float_floors: Vec<(u32, u32)> = base.floats.iter().map(|f| self.floor(&f.group.tabs)).collect();
 		let cols = self.cols;
 		let base = self.base();
 		for (c, (w, h)) in base.cells.iter_mut().zip(floors) {
 			(c.min_w, c.min_h) = (w, h);
+		}
+		for (f, (w, h)) in base.floats.iter_mut().zip(float_floors) {
+			(f.min_w, f.min_h) = (w, h);
 		}
 		base.refit(cols);
 		self.follow();
@@ -388,6 +506,14 @@ impl PackedState {
 		self.cfg.title_h_rem * self.rem_px
 	}
 
+	/// The root's inline style: the chrome band's height, and how far the grid's content runs, which
+	/// sizes the layers the floats stay put in.
+	pub fn root_style(&self) -> String {
+		let (sw, sh) = self.step();
+		let (w, h) = self.grid.cells.iter().fold((0, 0), |(w, h), c| (w.max(c.x + c.w), h.max(c.y + c.h)));
+		format!("--tl-title-h:{}rem; --tl-extent-w:{}px; --tl-extent-h:{}px;", self.cfg.title_h_rem, w as f64 * sw, h as f64 * sh)
+	}
+
 	/// Read access to the live grid — for a host rebuilding its panel list from a restored layout.
 	pub fn grid(&self) -> &PackedGrid {
 		&self.grid
@@ -440,7 +566,10 @@ impl PackedState {
 	/// a single-signal effect reads this first (to subscribe) and only writes when it's `true`, so
 	/// the resulting write doesn't re-fire the effect into a loop.
 	pub fn wants_undo_snapshot(&self) -> bool {
-		self.drag.is_none() && self.grid.state == GridState::Settled && !self.grid.cells.is_empty() && self.undo.states.get(self.undo.cursor) != Some(&self.grid)
+		self.drag.is_none()
+			&& self.grid.state == GridState::Settled
+			&& !(self.grid.cells.is_empty() && self.grid.floats.is_empty())
+			&& self.undo.states.get(self.undo.cursor) != Some(&self.grid)
 	}
 
 	/// Snapshot a *solid* layout into the undo history: only when the grid is at rest — no drag in
@@ -450,7 +579,7 @@ impl PackedState {
 		if self.drag.is_some() {
 			return;
 		}
-		if self.grid.state != GridState::Settled || self.grid.cells.is_empty() {
+		if self.grid.state != GridState::Settled || (self.grid.cells.is_empty() && self.grid.floats.is_empty()) {
 			return;
 		}
 		if self.undo.states.get(self.undo.cursor) == Some(&self.grid) {
@@ -479,7 +608,7 @@ impl PackedState {
 		match serial::load(&json) {
 			// An empty payload parses fine and renders a blank dock, which reads as a broken app rather
 			// than as a cache to fall past — so it is a miss, like a corrupt one.
-			Ok(grid) if grid.cells.is_empty() => {
+			Ok(grid) if grid.cells.is_empty() && grid.floats.is_empty() => {
 				report(&format!("tilers: cached layout at {key:?} is empty; re-seeding"));
 				Some(false)
 			}
@@ -503,7 +632,16 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(gid);
-		let (w, h) = self.grid.cells.iter().find(|c| c.group.id == gid).map(|c| (c.w, c.h)).expect("press_tile: group exists");
+		if self.locked(&self.group(gid).expect("press_tile: group exists").tabs) {
+			return; // a locked tile stays where it is
+		}
+		let (w, h, float_at) = match self.grid.floats.iter().find(|f| f.group.id == gid) {
+			Some(f) => {
+				let (x, y, w, h) = self.shown(f);
+				(w, h, Some(((f.x, f.y), (x, y))))
+			}
+			None => self.grid.cells.iter().find(|c| c.group.id == gid).map(|c| (c.w, c.h, None)).expect("press_tile: group exists"),
+		};
 		self.drag = Some(Drag {
 			source: DragSource::Tile(gid),
 			src_w: w,
@@ -515,6 +653,8 @@ impl PackedState {
 			target: None,
 			carried: false,
 			incoming: None,
+			fixed: false,
+			float_at,
 		});
 	}
 
@@ -524,14 +664,23 @@ impl PackedState {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
 		self.focus(from);
-		let c = self.grid.cells.iter().find(|c| c.group.id == from).expect("press_tab: group exists");
-		// A lone tab is its tile, so moving it keeps the tile (a spine stays one); a torn tab opens at the width a spine keeps.
-		let (source, w) = if c.group.tabs.len() > 1 {
-			(DragSource::Tab { panel, from }, c.collapsed.unwrap_or(c.w))
-		} else {
-			(DragSource::Tile(from), c.w)
+		let fixed = self.locked(std::slice::from_ref(&panel)); // a click still activates it
+		let (tabs, tile_w, tab_w, h) = match self.grid.floats.iter().find(|f| f.group.id == from) {
+			Some(f) => {
+				let (_, _, w, h) = self.shown(f);
+				(f.group.tabs.len(), w, w, h)
+			}
+			None => {
+				let c = self.grid.cells.iter().find(|c| c.group.id == from).expect("press_tab: group exists");
+				(c.group.tabs.len(), c.w, c.collapsed.unwrap_or(c.w), c.h)
+			}
 		};
-		let h = c.h;
+		// A lone tab is its tile, so moving it keeps the tile (a spine stays one); a torn tab opens at the width a spine keeps.
+		let (source, w) = if tabs > 1 {
+			(DragSource::Tab { panel, from }, tab_w)
+		} else {
+			(DragSource::Tile(from), tile_w)
+		};
 		self.drag = Some(Drag {
 			source,
 			src_w: w,
@@ -543,6 +692,8 @@ impl PackedState {
 			target: None,
 			carried: false,
 			incoming: None,
+			fixed,
+			float_at: None,
 		});
 	}
 
@@ -556,7 +707,17 @@ impl PackedState {
 		if self.resize.is_some() {
 			return; // one gesture at a time: a drag would drop the cells the resize addresses
 		}
-		let hosted = self.grid.cells.iter().find(|c| c.group.tabs.contains(&panel)).map(|c| (c.group.id, c.group.tabs.len(), c.w, c.h));
+		let hosted = self
+			.grid
+			.cells
+			.iter()
+			.map(|c| (&c.group, c.w, c.h))
+			.chain(self.grid.floats.iter().map(|f| (&f.group, f.w, f.h)))
+			.find(|(g, ..)| g.tabs.contains(&panel))
+			.map(|(g, w, h)| (g.id, g.tabs.len(), w, h));
+		if hosted.is_some() && self.locked(std::slice::from_ref(&panel)) {
+			return; // a locked panel stays where it is
+		}
 		let (source, src_w, src_h, incoming) = match hosted {
 			Some((from, tabs, w, h)) => {
 				self.focus(from);
@@ -581,6 +742,8 @@ impl PackedState {
 			target: None,
 			carried: true,
 			incoming,
+			fixed: false,
+			float_at: None,
 		});
 	}
 
@@ -610,6 +773,9 @@ impl PackedState {
 	/// a no-op without a DOM).
 	pub fn drag_move(&mut self, cursor: (f64, f64)) {
 		let Some(mut d) = self.drag.clone() else { return };
+		if d.fixed {
+			return;
+		}
 		d.cursor = cursor;
 		if !d.armed {
 			let (dx, dy) = (cursor.0 - d.start.0, cursor.1 - d.start.1);
@@ -619,6 +785,19 @@ impl PackedState {
 				return;
 			}
 			d.armed = true;
+		}
+		if let Some((_, (x, y))) = d.float_at {
+			// A float moves under the pointer, held in the view: a function of its press and the cursor.
+			let Some(i) = self.grid.floats.iter().position(|f| f.group.id == d.source.group()) else {
+				self.drag = None; // closed under the gesture
+				return;
+			};
+			let ((sw, sh), (vc, vr), (_, _, w, h)) = (self.step_px, self.view(), self.shown(&self.grid.floats[i]));
+			let shift = |at: u32, from: f64, to: f64, step: f64, room: u32| (at as i64 + ((to - from) / step).round() as i64).clamp(0, room as i64) as u32;
+			let f = &mut self.grid.floats[i];
+			(f.x, f.y) = (shift(x, d.start.0, cursor.0, sw, vc.saturating_sub(w)), shift(y, d.start.1, cursor.1, sh, vr.saturating_sub(h)));
+			self.drag = Some(d);
+			return;
 		}
 		if d.incoming.is_some() {
 			d.source = DragSource::Tile(self.grid.clone().mint_group_id()); // the id its landing will mint
@@ -647,17 +826,7 @@ impl PackedState {
 		if let DropTarget::Tab { group, index } = t {
 			let dragged: Vec<String> = match (&d.source, &d.incoming) {
 				(_, Some((panel, ..))) | (DragSource::Tab { panel, .. }, None) => vec![panel.0.clone()],
-				(DragSource::Tile(g), None) => self
-					.grid
-					.cells
-					.iter()
-					.find(|c| c.group.id == *g)
-					.expect("drag source group exists")
-					.group
-					.tabs
-					.iter()
-					.map(|p| p.0.clone())
-					.collect(),
+				(DragSource::Tile(g), None) => self.group(*g).expect("drag source group exists").tabs.iter().map(|p| p.0.clone()).collect(),
 			};
 			t = DropTarget::Tab {
 				group,
@@ -672,6 +841,9 @@ impl PackedState {
 	/// unarmed release is a plain click, which activates a tab and opens a spine.
 	pub fn drag_release(&mut self) {
 		let Some(d) = self.drag.take() else { return };
+		if d.float_at.is_some() {
+			return; // it moved live
+		}
 		if d.armed {
 			if let Some(t) = d.target.clone() {
 				let mut g = self.grid.clone();
@@ -702,16 +874,27 @@ impl PackedState {
 	/// A native drag (a host's card, a file) entered a tab: open it, so its content can take the drop.
 	/// A tab gone since the event was queued is ignored.
 	pub fn drag_enter_tab(&mut self, gid: GroupId, panel: &PanelId) {
-		if let Some(c) = self.base().cells.iter_mut().find(|c| c.group.id == gid)
-			&& let Some(i) = c.group.tabs.iter().position(|p| p == panel)
+		let base = self.base();
+		if let Some(g) = base
+			.cells
+			.iter_mut()
+			.map(|c| &mut c.group)
+			.chain(base.floats.iter_mut().map(|f| &mut f.group))
+			.find(|g| g.id == gid)
+			&& let Some(i) = g.tabs.iter().position(|p| p == panel)
 		{
-			c.group.active = i;
+			g.active = i;
 		}
 		self.follow();
 	}
 
 	pub fn drag_cancel(&mut self) {
-		self.drag = None;
+		if let Some(d) = self.drag.take()
+			&& let Some(((x, y), _)) = d.float_at
+			&& let Some(f) = self.grid.floats.iter_mut().find(|f| f.group.id == d.source.group())
+		{
+			(f.x, f.y) = (x, y);
+		}
 	}
 
 	/// One frame of a held drag: the innermost scroller (the root, its scrolling ancestors, then the
@@ -720,7 +903,9 @@ impl PackedState {
 	/// they moved, and the target was re-resolved under the cursor.
 	#[cfg(target_arch = "wasm32")]
 	pub fn autoscroll(&mut self) -> bool {
-		let Some(y) = self.drag.as_ref().filter(|d| d.armed).map(|d| d.cursor.1) else { return false };
+		let Some(y) = self.drag.as_ref().filter(|d| d.armed && d.float_at.is_none()).map(|d| d.cursor.1) else {
+			return false;
+		};
 		let root = self.root.clone().expect("binding sets the root at mount, before any drag");
 		let window = web_sys::window().expect("a browser window");
 		let page = window.document().expect("a document").scrolling_element().expect("a standards-mode document has one");
@@ -789,16 +974,22 @@ impl PackedState {
 		true
 	}
 
-	/// Begin a resize of tile `idx` from `grip` at the pointer `(px, py)`.
-	pub fn resize_start(&mut self, idx: usize, grip: Grip, px: f64, py: f64) {
+	/// Begin a resize of tile or float `gid` from `grip` at the pointer `(px, py)`.
+	pub fn resize_start(&mut self, gid: GroupId, grip: Grip, px: f64, py: f64) {
 		if self.drag.is_some() {
 			return; // one gesture at a time
 		}
 		self.resize_end(); // a second pointer on another grip: the first gesture ends where it is
-		assert!(grip != Grip::Left || self.grid.free_left(idx), "a left grip on a boundary: bindings render `Frame::grips`");
-		let row = self.step().1;
+		let free_left = match self.grid.cells.iter().position(|c| c.group.id == gid) {
+			Some(idx) => self.grid.free_left(idx),
+			None => self.shown(self.grid.floats.iter().find(|f| f.group.id == gid).expect("resize_start: group exists")).0 > 0,
+		};
+		assert!(grip != Grip::Left || free_left, "a left grip on a boundary: bindings render `Frame::grips`");
+		self.focus(gid);
+		let (row, view) = (self.step().1, self.view());
 		self.resize = Some(ResizeStart {
-			gid: self.grid.cells[idx].group.id,
+			view,
+			gid,
 			grip,
 			press: self.grid.clone(),
 			press_at: (px, py),
@@ -827,6 +1018,11 @@ impl PackedState {
 	pub fn focus(&mut self, gid: GroupId) {
 		self.focused = Some(gid);
 		self.keys.cancel();
+		let floats = &self.grid.floats;
+		if floats.iter().any(|f| f.group.id == gid) {
+			self.stack.retain(|g| *g != gid && floats.iter().any(|f| f.group.id == *g));
+			self.stack.push(gid);
+		}
 	}
 
 	/// `focused`/`maximized` filtered to a group the layout still holds. They're set by a press and
@@ -834,7 +1030,7 @@ impl PackedState {
 	/// the focused pane's last tab into a fresh group, or re-home it into another. Resolving liveness
 	/// at every read is why nothing downstream has to remember to clear them.
 	fn live(&self, gid: Option<GroupId>) -> Option<GroupId> {
-		gid.filter(|g| self.grid.cells.iter().any(|c| c.group.id == *g))
+		gid.filter(|g| self.group(*g).is_some())
 	}
 
 	/// Walk the undo history by `dir` and settle whatever comes back into the live geometry. A
@@ -950,17 +1146,15 @@ impl PackedState {
 			Builtin::Undo => !gesture && self.restore(-1),
 			Builtin::Redo => !gesture && self.restore(1),
 			Builtin::Close => match self.live(self.focused) {
-				Some(g) if !gesture => {
-					let active = self
-						.grid
-						.cells
-						.iter()
-						.find(|c| c.group.id == g)
-						.expect("live() checked the group exists")
-						.group
-						.active_panel()
-						.clone();
-					self.close(&active);
+				Some(g) if !gesture && !self.locked(&self.group(g).expect("live() checked the group exists").tabs) => {
+					self.close_tile(g);
+					true
+				}
+				_ => false,
+			},
+			Builtin::Float => match self.live(self.focused) {
+				Some(g) if !gesture && !self.locked(&self.group(g).expect("live() checked the group exists").tabs) => {
+					self.toggle_float(g);
 					true
 				}
 				_ => false,
@@ -973,7 +1167,7 @@ impl PackedState {
 				None => false,
 			},
 			Builtin::Collapse => match self.live(self.focused) {
-				Some(g) if !gesture => {
+				Some(g) if !gesture && self.grid.cells.iter().any(|c| c.group.id == g) => {
 					self.collapse(g);
 					true
 				}
@@ -1039,84 +1233,127 @@ impl PackedState {
 		}
 	}
 
-	/// The tile skeleton: one [`Frame`] per rendered cell (a maximized pane hides the rest), in the
-	/// preview's order. `titles` maps panel ids to their tab labels (owned by the binding).
+	/// The tile skeleton: one [`Frame`] per rendered tile (a maximized pane hides the rest) in the
+	/// preview's order, then one per float, bottom to top. `titles` maps panel ids to their tab labels
+	/// (owned by the binding).
 	pub fn frames(&self, titles: &HashMap<PanelId, String>) -> Vec<Frame> {
 		let g = self.preview();
 		let (sw, sh) = self.step();
 		let maximized = self.live(self.maximized);
+		let view = (self.scroll.0 + self.root_size.0, self.scroll.1 + self.root_size.1);
 		let mut out = Vec::new();
 		for (idx, cell) in g.cells.iter().enumerate() {
 			let gid = cell.group.id;
 			// Maximize is a view-only override: the focused tile fills the container, others omitted.
-			if let Some(mg) = maximized
-				&& mg != gid
-			{
+			if maximized.is_some_and(|m| m != gid) {
 				continue;
 			}
+			let (left, top, right, bottom) = (cell.x as f64 * sw, cell.y as f64 * sh, (cell.x + cell.w) as f64 * sw, (cell.y + cell.h) as f64 * sh);
 			let style = if maximized == Some(gid) {
-				format!("left:calc({GAP} / 2); top:calc({GAP} / 2); width:calc(100% - {GAP}); height:calc(100% - {GAP});")
+				"left:0; top:0; width:100%; height:100%;".to_string()
 			} else {
-				format!(
-					"left:calc({}px + {GAP} / 2); top:calc({}px + {GAP} / 2); width:calc({}px - {GAP}); height:calc({}px - {GAP});",
-					cell.x as f64 * sw,
-					cell.y as f64 * sh,
-					cell.w as f64 * sw,
-					cell.h as f64 * sh
-				)
+				format!("left:{left}px; top:{top}px; width:{}px; height:{}px;", cell.w as f64 * sw, cell.h as f64 * sh)
 			};
 			let (shadow, tab_drop) = self.drop_flags(gid, cell);
 			if shadow {
 				// The drag's landing cell: a detail-less grey placeholder, no chrome, no content.
 				out.push(Frame {
 					gid,
-					idx,
 					style,
 					shadow: true,
 					tab_drop: false,
 					maximized: false,
 					collapsed: false,
+					floating: false,
+					locked: false,
 					tabs: Vec::new(),
 					grips: Vec::new(),
 				});
 				continue;
 			}
-			let tabs = Tab::strip(&cell.group, titles);
+			let spine = cell.collapsed.is_some();
 			out.push(Frame {
 				gid,
-				idx,
 				style,
 				shadow: false,
 				tab_drop,
 				maximized: maximized == Some(gid),
-				collapsed: cell.collapsed.is_some() && maximized != Some(gid),
-				tabs,
-				grips: self.grips(&g, idx, maximized == Some(gid)),
+				collapsed: spine && maximized != Some(gid),
+				floating: false,
+				locked: self.locked(&cell.group.tabs),
+				tabs: self.strip(&cell.group, titles),
+				grips: self.grips((left, top, right, bottom), view, g.free_left(idx), spine, maximized == Some(gid)),
+			});
+		}
+		let (sw, sh) = self.step_px;
+		for (k, f) in self.stacked(&g).into_iter().enumerate() {
+			let gid = f.group.id;
+			if maximized.is_some_and(|m| m != gid) {
+				continue;
+			}
+			let (style, grips) = if maximized == Some(gid) {
+				(sticky((0.0, 0.0, self.root_size.0, self.root_size.1), 201 + 2 * k), Vec::new())
+			} else {
+				let (x, y, w, h) = self.shown(f);
+				let (left, top, right, bottom) = (x as f64 * sw, y as f64 * sh, (x + w) as f64 * sw, (y + h) as f64 * sh);
+				(
+					sticky((left, top, w as f64 * sw, h as f64 * sh), 201 + 2 * k),
+					self.grips((left, top, right, bottom), self.root_size, x > 0, false, false),
+				)
+			};
+			out.push(Frame {
+				gid,
+				style,
+				shadow: false,
+				tab_drop: false,
+				maximized: maximized == Some(gid),
+				collapsed: false,
+				floating: true,
+				locked: self.locked(&f.group.tabs),
+				tabs: self.strip(&f.group, titles),
+				grips,
 			});
 		}
 		out
 	}
 
-	/// Tile `idx`'s grips in paint order (the corner last, over the edges' ends) with their inline
-	/// styles. A boundary between two tiles is the left one's right grip alone, so a left grip exists
-	/// only on a free left edge. In a [`framed`] view, a grip that would lie on the view's own edge,
-	/// under a host's grip, keeps clear of it: the right one of a tile
-	/// reaching the band at the view's right is a [`Grip::Wall`], the bottom one of a tile reaching that
-	/// band at its bottom a [`Grip::Fold`], which the stylesheet places from `--tl-wall`/`--tl-fold`,
-	/// the view's edge right of the tile's left/below its top.
-	fn grips(&self, g: &PackedGrid, idx: usize, maximized: bool) -> Vec<(Grip, String)> {
-		let c = &g.cells[idx];
-		let (sw, sh) = self.step();
-		let (view_right, view_bottom) = (self.scroll.0 + self.root_size.0, self.scroll.1 + self.root_size.1);
-		let (left, right) = (c.x as f64 * sw, (c.x + c.w) as f64 * sw);
-		let (top, bottom) = (c.y as f64 * sh, (c.y + c.h) as f64 * sh);
+	/// `g`'s floats bottom to top: the last pressed on top, those never pressed under them in layout order.
+	fn stacked<'g>(&self, g: &'g PackedGrid) -> Vec<&'g Floating> {
+		let mut order: Vec<&Floating> = g.floats.iter().collect();
+		order.sort_by_key(|f| self.stack.iter().position(|s| *s == f.group.id));
+		order
+	}
+
+	/// `group`'s tab strip.
+	fn strip(&self, group: &Group, titles: &HashMap<PanelId, String>) -> Vec<Tab> {
+		group
+			.tabs
+			.iter()
+			.enumerate()
+			.map(|(i, id)| Tab {
+				id: id.clone(),
+				title: titles.get(id).cloned().unwrap_or_default(),
+				active: i == group.active,
+				locked: self.locked(std::slice::from_ref(id)),
+			})
+			.collect()
+	}
+
+	/// The grips of a tile or float at `(left, top, right, bottom)` px, in paint order (the corner last,
+	/// over the edges' ends), with their inline styles. A boundary between two tiles is the left one's
+	/// right grip alone, so a left grip exists only on a `free_left` edge. In a [`framed`] view, a grip
+	/// that would lie on the view's own edge (`view`, its right and bottom), under a host's grip, keeps
+	/// clear of it: the right one of a rect reaching the band at the view's right is a [`Grip::Wall`],
+	/// the bottom one of a rect reaching that band at its bottom a [`Grip::Fold`], which the stylesheet
+	/// places from `--tl-wall`/`--tl-fold`, the view's edge right of the rect's left/below its top.
+	fn grips(&self, (left, top, right, bottom): (f64, f64, f64, f64), (view_right, view_bottom): (f64, f64), free_left: bool, spine: bool, maximized: bool) -> Vec<(Grip, String)> {
 		let grip = self.title_h() / 8.0; // the stylesheet's edge-grip thickness
 		// A host's grip is guessed at most twice ours: its root font may be larger.
 		let walled = self.framed && !maximized && left < view_right && right > view_right - 2.0 * grip;
 		let folded = self.framed && !maximized && top < view_bottom && bottom > view_bottom - 2.0 * grip;
-		let spine = c.collapsed.is_some(); // a spine's width is derived, so it has no grip that sets one, maximized or not
+		// A spine's width is derived, so it has no grip that sets one, maximized or not.
 		[
-			(!spine && g.free_left(idx)).then_some((Grip::Left, String::new())),
+			(!spine && free_left).then_some((Grip::Left, String::new())),
 			(!spine).then(|| {
 				if walled {
 					(Grip::Wall, format!("--tl-wall:{}px;", view_right - left))
@@ -1177,6 +1414,30 @@ impl PackedState {
 				map.insert(id.clone(), ContentSlot { style, group: cell.group.id });
 			}
 		}
+		let (sw, sh, chrome) = (self.step_px.0, self.step_px.1, self.title_h());
+		for (k, f) in self.stacked(&g).into_iter().enumerate() {
+			let gid = f.group.id;
+			let (x, y, w, h) = self.shown(f);
+			let rect = if maximized == Some(gid) {
+				(0.0, 0.0, self.root_size.0, self.root_size.1)
+			} else {
+				(x as f64 * sw, y as f64 * sh, w as f64 * sw, h as f64 * sh)
+			};
+			for id in &f.group.tabs {
+				let shown = !hidden.contains(id) && id == f.group.active_panel() && maximized.is_none_or(|m| m == gid);
+				let style = if shown {
+					// Under its frame, which paints its border and grips over it: the frame's body is see-through.
+					let (l, t, w, h) = rect;
+					format!(
+						"display:block; position:sticky; left:{l}px; top:calc({t}px + {chrome}px); width:{w}px; height:calc({h}px - {chrome}px); margin-bottom:calc({chrome}px - {h}px); z-index:{}; background:var(--tl-group-bg, #1e1e1e);",
+						200 + 2 * k
+					)
+				} else {
+					"display:none;".to_string()
+				};
+				map.insert(id.clone(), ContentSlot { style, group: gid });
+			}
+		}
 		map
 	}
 
@@ -1201,17 +1462,19 @@ impl PackedState {
 	/// The floating ghost of whatever is being dragged: it tracks the pointer 1:1 (`cursor − grab`),
 	/// keeping the grabbed point under the cursor, while its shadow snaps to the landing cell.
 	pub fn ghost(&self, titles: &HashMap<PanelId, String>) -> Option<Ghost> {
-		let d = self.drag.as_ref().filter(|d| d.armed && !d.carried)?; // the browser draws a carry's drag image
+		// The browser draws a carry's drag image; a moving float is its own.
+		let d = self.drag.as_ref().filter(|d| d.armed && !d.carried && d.float_at.is_none())?;
 		let (tabs, collapsed) = match &d.source {
 			DragSource::Tile(g) => {
-				let c = self.grid.cells.iter().find(|c| c.group.id == *g).expect("drag source group exists");
-				(Tab::strip(&c.group, titles), c.collapsed.is_some())
+				let spine = self.grid.cells.iter().any(|c| c.group.id == *g && c.collapsed.is_some());
+				(self.strip(self.group(*g).expect("drag source group exists"), titles), spine)
 			}
 			DragSource::Tab { panel, .. } => (
 				vec![Tab {
 					id: panel.clone(),
 					title: titles.get(panel).cloned().unwrap_or_default(),
 					active: true,
+					locked: false,
 				}],
 				false,
 			),
@@ -1253,10 +1516,9 @@ impl PackedState {
 	/// The `?` modal, while open. `titles` names the pane it targets.
 	pub fn help(&self, titles: &HashMap<PanelId, String>) -> Option<Help> {
 		self.help.then(|| Help {
-			pane: self.live(self.focused).and_then(|g| {
-				let c = self.grid.cells.iter().find(|c| c.group.id == g).expect("live() checked the group exists");
-				titles.get(c.group.active_panel()).cloned()
-			}),
+			pane: self
+				.live(self.focused)
+				.and_then(|g| titles.get(self.group(g).expect("live() checked the group exists").active_panel()).cloned()),
 			rows: self.keys.help(),
 		})
 	}
@@ -1294,6 +1556,16 @@ thread_local! {
 	static KEYS_OWNER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
+/// What a host declares of a panel, mirrored from its binding's panel list.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Declared {
+	/// What its content needs to stay legible; every tile hosting it is floored to fit.
+	pub min: MinSize,
+	/// The user can't close it or move it elsewhere: no close, no tile drag, no tear-out, no float or
+	/// dock. Resizing, collapsing, maximizing and others joining its tile stay open.
+	pub locked: bool,
+}
+
 /// A toast. `seq` keys its element, so a repeat remounts it and replays the fade.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
@@ -1301,14 +1573,11 @@ pub struct Notice {
 	pub text: String,
 }
 
-/// One tile in the skeleton view-model: its group id, position style, the drop-feedback flags
-/// (`shadow` ⇒ render the grey landing placeholder, `tab_drop` ⇒ highlight the header), and its
+/// One tile or float in the skeleton view-model: its group id, position style, the drop-feedback
+/// flags (`shadow` ⇒ render the grey landing placeholder, `tab_drop` ⇒ highlight the header), and its
 /// tabs (empty when `shadow`).
 pub struct Frame {
 	pub gid: GroupId,
-	/// Index into the (preview) grid's cells — a resize gesture never overlaps a drag, so the
-	/// preview equals the real grid then and this addresses the right cell for [`resize_start`](PackedState::resize_start).
-	pub idx: usize,
 	pub style: String,
 	pub shadow: bool,
 	pub tab_drop: bool,
@@ -1316,6 +1585,10 @@ pub struct Frame {
 	pub maximized: bool,
 	/// Showing as a spine (see [`PackedState::collapse`]); a maximized tile shows open.
 	pub collapsed: bool,
+	/// Above the grid (see [`PackedState::toggle_float`]): rendered in the floats layer, its body see-through.
+	pub floating: bool,
+	/// A tab is [`Declared::locked`]: the tile has no close, float or dock.
+	pub locked: bool,
 	pub tabs: Vec<Tab>,
 	/// The grips to render, in paint order (none on a shadow), each with its inline style.
 	pub grips: Vec<(Grip, String)>,
@@ -1326,20 +1599,8 @@ pub struct Tab {
 	pub id: PanelId,
 	pub title: String,
 	pub active: bool,
-}
-impl Tab {
-	fn strip(group: &Group, titles: &HashMap<PanelId, String>) -> Vec<Self> {
-		group
-			.tabs
-			.iter()
-			.enumerate()
-			.map(|(i, id)| Self {
-				id: id.clone(),
-				title: titles.get(id).cloned().unwrap_or_default(),
-				active: i == group.active,
-			})
-			.collect()
-	}
+	/// [`Declared::locked`]: no close.
+	pub locked: bool,
 }
 /// A panel's slot in the content overlay: its inline style and host group.
 pub struct ContentSlot {
@@ -1419,7 +1680,7 @@ fn slot_style(maximized: Option<GroupId>, group: GroupId, x: u32, y: u32, w: u32
 		if group != mg || !active {
 			return "display:none;".into();
 		}
-		return format!("display:block; left:calc({GAP} / 2); top:calc({chrome_h}px + {GAP} / 2); width:calc(100% - {GAP}); height:calc(100% - {chrome_h}px - {GAP});");
+		return format!("display:block; left:0; top:{chrome_h}px; width:100%; height:calc(100% - {chrome_h}px);");
 	}
 	if !active {
 		return "display:none;".into();
@@ -1428,7 +1689,20 @@ fn slot_style(maximized: Option<GroupId>, group: GroupId, x: u32, y: u32, w: u32
 	// top/height bridge the two with `calc`.
 	let (left, top) = (x as f64 * step_w, y as f64 * step_h);
 	let (width, height) = (w as f64 * step_w, h as f64 * step_h);
-	format!("display:block; left:calc({left}px + {GAP} / 2); top:calc({top}px + {chrome_h}px + {GAP} / 2); width:calc({width}px - {GAP}); height:calc({height}px - {chrome_h}px - {GAP});")
+	format!("display:block; left:{left}px; top:calc({top}px + {chrome_h}px); width:{width}px; height:calc({height}px - {chrome_h}px);")
+}
+
+/// Where float `f` shows in a `(cols, rows)` view: capped to it, its floor winning, then pulled inside it.
+fn fit(f: &Floating, (vc, vr): (u32, u32)) -> (u32, u32, u32, u32) {
+	let (w, h) = (f.w.min(vc).max(f.min_w).max(1), f.h.min(vr).max(f.min_h).max(1));
+	(f.x.min(vc.saturating_sub(w)), f.y.min(vr.saturating_sub(h)), w, h)
+}
+
+/// A float's frame at `(left, top, width, height)` px of the view, painted at `z`. Sticky in a layer as
+/// large as the scrolled content, so it stays put as the grid scrolls under it; its negative margin
+/// takes it out of the layer's flow, so floats never stack.
+fn sticky((l, t, w, h): (f64, f64, f64, f64), z: usize) -> String {
+	format!("position:sticky; left:{l}px; top:{t}px; width:{w}px; height:{h}px; margin-bottom:-{h}px; z-index:{z};")
 }
 
 /// The document's root font size in px. Only ever reached from a live measure of a mounted element,
@@ -1474,6 +1748,10 @@ struct Drag {
 	carried: bool,
 	/// A carried panel not hosted yet, and the `w×h` its tile wants; `source` is the tile its landing mints.
 	incoming: Option<(PanelId, u32, u32)>,
+	/// A locked tab's press: it never arms, so its release is a click.
+	fixed: bool,
+	/// A float moved by its header: where it was stored and where it showed at the press.
+	float_at: Option<((u32, u32), (u32, u32))>,
 }
 
 /// A resize in flight: the grabbed tile and grip, the layout and pointer at the press, and the
@@ -1486,6 +1764,8 @@ struct ResizeStart {
 	cursor: (f64, f64),
 	/// The row px at the press: a view-height change mid-gesture restretches rows, never the rows dragged.
 	row: f64,
+	/// The view in least steps at the press, which holds a float's gesture in.
+	view: (u32, u32),
 }
 
 /// Linear undo history of settled layouts with a cursor into it. `push` appends a fresh edit,

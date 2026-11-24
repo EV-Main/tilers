@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use tilers_core::{
-	Config, Grip, Group, GroupId, PackedState, PanelId, Step,
+	Config, Declared, Grip, Group, GroupId, PackedState, PanelId, Step,
 	keys::{Binding, Builtin, Chord, Command, Help, Hint, KeyInput, Node},
 	model::packed::{Cell, DragSource, DropTarget, MinSize, PackedGrid},
 };
@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Action kinds, in the order their swarm weights are drawn.
-pub const N_KINDS: usize = 12;
+pub const N_KINDS: usize = 14;
 /// Height of the tile chrome: `Config::title_h_rem`'s default resolved against the 16px root font a
 /// non-DOM target assumes. Mirrored here only to aim at headers and to re-run the pure
 /// `resolve_target` for the coverage tally.
@@ -42,6 +42,8 @@ const SET_MINS: usize = 8;
 const SCROLL: usize = 9;
 const DRAG_ENTER_TAB: usize = 10;
 const CARRY: usize = 11;
+const FLOAT: usize = 12;
+const TOGGLE: usize = 13;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -55,6 +57,18 @@ pub enum Action {
 		w: u32,
 		h: u32,
 		min: MinSize,
+		locked: bool,
+	},
+	/// A host opening a panel straight into the float layer.
+	Float {
+		w: u32,
+		h: u32,
+		min: MinSize,
+		locked: bool,
+	},
+	/// A host floating a tile out, or docking a float.
+	Toggle {
+		group: GroupId,
 	},
 	AddTab {
 		group: GroupId,
@@ -72,7 +86,7 @@ pub enum Action {
 	/// A resize from one of the tile's grips; `commit: false` leaves the gesture in flight, which is a
 	/// state a user can genuinely rest in.
 	Resize {
-		idx: usize,
+		group: GroupId,
 		grip: Grip,
 		start: (f64, f64),
 		path: Vec<(f64, f64)>,
@@ -90,11 +104,12 @@ pub enum Action {
 	Scroll {
 		at: (f64, f64),
 	},
-	/// A host re-declaring a panel's min in its panel list. The floor is unbounded by the tile's
-	/// current span, which is the case `resize` never produces.
+	/// A host re-declaring a panel in its panel list. The floor is unbounded by the tile's current span,
+	/// which is the case `resize` never produces.
 	SetMins {
 		panel: PanelId,
 		min: MinSize,
+		locked: bool,
 	},
 	/// A native drag entering a tab, which may have closed or moved since the event was queued.
 	DragEnterTab {
@@ -142,69 +157,94 @@ pub fn noisy(inputs: &[KeyInput]) -> bool {
 pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	match action {
 		Action::Measure { w, h, framed } => return world.measure(*w, *h, *framed),
-		Action::Place { w, h, min } => {
+		Action::Place { w, h, min, locked } => {
 			world.structural_edit();
 			let gid = world.state.mint_group_id();
-			let panel = world.mint_panel(*min);
+			let panel = world.mint_panel(*min, *locked);
 			world.state.place(Group::new(gid, panel), *w, *h);
+		}
+		Action::Float { w, h, min, locked } => {
+			world.structural_edit();
+			let gid = world.state.mint_group_id();
+			let panel = world.mint_panel(*min, *locked);
+			let cells = world.state.grid().cells.clone();
+			world.state.float(Group::new(gid, panel), *w, *h);
+			if world.state.grid().cells != cells {
+				return Err("opening a float moved the grid".to_string());
+			}
+		}
+		Action::Toggle { group } => {
+			world.structural_edit();
+			// Docking onto a header joins that tile, so only what is hosted at all is kept.
+			let hosted = |w: &World| w.homes().into_keys().collect::<std::collections::HashSet<_>>();
+			let before = hosted(world);
+			world.state.toggle_float(*group);
+			if hosted(world) != before {
+				return Err(format!("floating or docking {group:?} changed what the layout hosts"));
+			}
 		}
 		Action::AddTab { group, min } => {
 			world.structural_edit();
-			let panel = world.mint_panel(*min);
+			let panel = world.mint_panel(*min, false);
 			world.state.add_tab(*group, panel);
 		}
 		Action::Focus { group } => world.state.focus(*group),
 		Action::Drag { grab, path, commit } => return drag(grab, path, *commit, world, mid),
-		Action::Resize { idx, grip, start, path, commit } => {
+		Action::Resize { group, grip, start, path, commit } => {
 			world.structural_edit();
-			world.state.resize_start(*idx, *grip, start.0, start.1);
+			world.state.resize_start(*group, *grip, start.0, start.1);
 			let press = world.state.grid().cells.clone();
-			// Only the grabbed edge moves; another tile moves only by being pushed along in front of it.
-			let edge = |c: &Cell| match grip {
-				Grip::Left => Some(c.x),
-				Grip::Right | Grip::Wall | Grip::Corner => Some(c.x + c.w),
-				Grip::Bottom | Grip::Fold => None,
-			};
-			let near = |c: &Cell| if *grip == Grip::Left { c.x + c.w } else { c.x };
-			let ahead = |a: u32, b: u32| if *grip == Grip::Left { a <= b } else { a >= b };
-			let g = &press[*idx];
-			for p in path {
-				world.cursor = *p;
-				world.state.resize_move(*p);
-				oracle::check_in_flight(world)?;
-				let now = &world.state.grid().cells;
-				for (j, (a, b)) in press.iter().zip(now).enumerate() {
-					if matches!(grip, Grip::Left | Grip::Right | Grip::Wall) && a.h != b.h {
-						return Err(format!("the {grip:?} grip changed tile {j}'s height: {a:?} → {b:?}"));
+			match press.iter().position(|c| c.group.id == *group) {
+				Some(idx) => {
+					// Only the grabbed edge moves; another tile moves only by being pushed along in front of it.
+					let edge = |c: &Cell| match grip {
+						Grip::Left => Some(c.x),
+						Grip::Right | Grip::Wall | Grip::Corner => Some(c.x + c.w),
+						Grip::Bottom | Grip::Fold => None,
+					};
+					let near = |c: &Cell| if *grip == Grip::Left { c.x + c.w } else { c.x };
+					let ahead = |a: u32, b: u32| if *grip == Grip::Left { a <= b } else { a >= b };
+					let g = &press[idx];
+					for p in path {
+						world.cursor = *p;
+						world.state.resize_move(*p);
+						oracle::check_in_flight(world)?;
+						let now = &world.state.grid().cells;
+						for (j, (a, b)) in press.iter().zip(now).enumerate() {
+							if matches!(grip, Grip::Left | Grip::Right | Grip::Wall) && a.h != b.h {
+								return Err(format!("the {grip:?} grip changed tile {j}'s height: {a:?} → {b:?}"));
+							}
+							if matches!(grip, Grip::Bottom | Grip::Fold) && (a.x, a.w) != (b.x, b.w) {
+								return Err(format!("the {grip:?} grip changed tile {j}'s columns: {a:?} → {b:?}"));
+							}
+							if matches!(grip, Grip::Fold | Grip::Wall) && j == idx && (b.w > a.w || b.h > a.h) {
+								return Err(format!("the {grip:?} grip grew its tile: {a:?} → {b:?}"));
+							}
+						}
+						if let (Some(e0), Some(e)) = (edge(g), edge(&now[idx])) {
+							for (j, (a, b)) in press.iter().zip(now).enumerate() {
+								let pushed = a.y < g.y + g.h && g.y < a.y + a.h && ahead(near(a), e0) && !ahead(near(a), e) && near(b) == e;
+								if j != idx && (a.x, a.w) != (b.x, b.w) && !pushed {
+									return Err(format!("the {grip:?} grip moved tile {j}, which its edge never reached: {a:?} → {b:?} (grabbed {:?})", now[idx]));
+								}
+							}
+						}
+						mid(world);
 					}
-					if matches!(grip, Grip::Bottom | Grip::Fold) && (a.x, a.w) != (b.x, b.w) {
-						return Err(format!("the {grip:?} grip changed tile {j}'s columns: {a:?} → {b:?}"));
-					}
-					if matches!(grip, Grip::Fold | Grip::Wall) && j == *idx && (b.w > a.w || b.h > a.h) {
-						return Err(format!("the {grip:?} grip grew its tile: {a:?} → {b:?}"));
-					}
-				}
-				if let (Some(e0), Some(e)) = (edge(g), edge(&now[*idx])) {
-					for (j, (a, b)) in press.iter().zip(now).enumerate() {
-						let pushed = a.y < g.y + g.h && g.y < a.y + a.h && ahead(near(a), e0) && !ahead(near(a), e) && near(b) == e;
-						if j != *idx && (a.x, a.w) != (b.x, b.w) && !pushed {
-							return Err(format!("the {grip:?} grip moved tile {j}, which its edge never reached: {a:?} → {b:?} (grabbed {:?})", now[*idx]));
+					// A gesture is a function of where the pointer is, not of how it got there.
+					if let Some(&last) = path.last() {
+						let there = world.state.grid().cells.clone();
+						world.state.resize_move(*start);
+						if world.state.grid().cells != press {
+							return Err(format!("back at the press point, the {grip:?} grip left {:?}, not {press:?}", world.state.grid().cells));
+						}
+						world.state.resize_move(last);
+						if world.state.grid().cells != there {
+							return Err(format!("returning to {last:?} via the press point gave {:?}, not {there:?}", world.state.grid().cells));
 						}
 					}
 				}
-				mid(world);
-			}
-			// A gesture is a function of where the pointer is, not of how it got there.
-			if let Some(&last) = path.last() {
-				let there = world.state.grid().cells.clone();
-				world.state.resize_move(*start);
-				if world.state.grid().cells != press {
-					return Err(format!("back at the press point, the {grip:?} grip left {:?}, not {press:?}", world.state.grid().cells));
-				}
-				world.state.resize_move(last);
-				if world.state.grid().cells != there {
-					return Err(format!("returning to {last:?} via the press point gave {:?}, not {there:?}", world.state.grid().cells));
-				}
+				None => float_resize(*group, *grip, *start, path, &press, world, mid)?,
 			}
 			if *commit {
 				world.state.resize_end();
@@ -212,10 +252,10 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 		}
 		Action::Key { inputs, aim } => return key(inputs, *aim, world),
 		Action::SaveLoad => return save_load(world),
-		Action::SetMins { panel, min } => {
+		Action::SetMins { panel, min, locked } => {
 			world.structural_edit();
-			world.mins.insert(panel.clone(), *min);
-			world.state.set_mins(world.mins.clone());
+			world.panels.insert(panel.clone(), Declared { min: *min, locked: *locked });
+			world.state.set_panels(world.panels.clone());
 		}
 		Action::Scroll { at } => {
 			world.scroll = *at;
@@ -225,10 +265,15 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 		Action::DragEnterTab { group, panel } => {
 			world.structural_edit();
 			let mut expect = world.state.grid().clone();
-			if let Some(c) = expect.cells.iter_mut().find(|c| c.group.id == *group)
-				&& let Some(i) = c.group.tabs.iter().position(|p| p == panel)
+			if let Some(g) = expect
+				.cells
+				.iter_mut()
+				.map(|c| &mut c.group)
+				.chain(expect.floats.iter_mut().map(|f| &mut f.group))
+				.find(|g| g.id == *group)
+				&& let Some(i) = g.tabs.iter().position(|p| p == panel)
 			{
-				c.group.active = i;
+				g.active = i;
 			}
 			world.state.drag_enter_tab(*group, panel);
 			if world.state.grid() != &expect {
@@ -246,18 +291,21 @@ pub fn apply(action: &Action, world: &mut World, mid: &mut dyn FnMut(&World)) ->
 /// Pick a valid action for the current `world`, weighting kinds by the per-run `weights` (swarm).
 pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Option<Action> {
 	let cells = &world.state.grid().cells;
+	let groups = groups(world);
 
-	let mut avail = vec![MEASURE, PLACE, KEY, SCROLL];
+	let mut avail = vec![MEASURE, PLACE, FLOAT, KEY, SCROLL];
 	// A carry is a gesture: it waits for a resize left in flight to end, as `carry` does.
 	if world.state.resizing().is_none() {
 		avail.push(CARRY);
 	}
-	if !cells.is_empty() {
+	if !groups.is_empty() {
 		avail.push(ADD_TAB);
 		avail.push(FOCUS);
 		avail.push(DRAG);
-		// `resize_start` indexes the cell list, so an empty grid has no grip to take.
-		avail.push(RESIZE);
+		avail.push(TOGGLE);
+		if world.state.frames(&HashMap::new()).iter().any(|f| !f.grips.is_empty()) {
+			avail.push(RESIZE);
+		}
 		avail.push(SET_MINS);
 		avail.push(DRAG_ENTER_TAB);
 		// A mid-resize grid is deliberately unsettled and `load` refits, so the two can't agree yet.
@@ -269,7 +317,6 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 	let ws: Vec<u32> = avail.iter().map(|&k| weights[k].max(1)).collect();
 	let kind = avail[frng.weighted(&ws)];
 	let (sw, sh) = world.shown_step();
-	let (ox, oy) = (world.origin.0 - world.scroll.0, world.origin.1 - world.scroll.1);
 
 	Some(match kind {
 		MEASURE => {
@@ -290,31 +337,46 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			// Sized as a fraction of what shows, so a tile stays a pane rather than a sliver.
 			let w = 1 + frng.below(world.state.cols().div_euclid(2));
 			let h = 1 + frng.below(world.state.rows().div_euclid(2));
-			Action::Place { w, h, min: min(frng, w, h) }
+			Action::Place {
+				w,
+				h,
+				min: min(frng, w, h),
+				locked: frng.below(8) == 0,
+			}
 		}
+		FLOAT => {
+			let w = 1 + frng.below(world.state.cols().min(64).div_euclid(2));
+			let h = 1 + frng.below(world.state.rows().div_euclid(2));
+			Action::Float {
+				w,
+				h,
+				min: min(frng, w, h),
+				locked: frng.below(8) == 0,
+			}
+		}
+		TOGGLE => Action::Toggle { group: pick_group(frng, world) },
 		ADD_TAB => Action::AddTab {
 			group: pick_group(frng, world),
 			min: min(frng, world.state.cols(), world.state.rows()),
 		},
 		FOCUS => Action::Focus { group: pick_group(frng, world) },
 		DRAG => {
-			let c = &cells[frng.below(cells.len() as u32) as usize];
-			let (left, top) = (ox + c.x as f64 * sw, oy + c.y as f64 * sh);
-			let width = c.w as f64 * sw;
+			let (group, [left, top, width, _]) = &groups[frng.below(groups.len() as u32) as usize];
+			let (left, top, width) = (*left, *top, *width);
 			// Half the time tear a tab (aim at its slot in the strip), else grab the header's empty area.
 			let grab = if frng.below(2) == 0 {
-				let i = frng.below(c.group.tabs.len() as u32);
+				let i = frng.below(group.tabs.len() as u32);
 				let x = (i as f64 * 40.0 + 12.0).min((width - 2.0).max(0.0));
 				Grab::Tab {
-					panel: c.group.tabs[i as usize].clone(),
-					from: c.group.id,
+					panel: group.tabs[i as usize].clone(),
+					from: group.id,
 					start: (left + x, top + 8.0),
 					grab: (x, 8.0),
 				}
 			} else {
 				let x = width * 0.8;
 				Grab::Tile {
-					gid: c.group.id,
+					gid: group.id,
 					start: (left + x, top + 8.0),
 					grab: (x, 8.0),
 				}
@@ -334,28 +396,26 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		RESIZE => {
 			// Only the grips a binding renders: a frame offers a left grip only on a free left edge.
 			let frames = world.state.frames(&HashMap::new());
-			let f = &frames[frng.below(frames.len() as u32) as usize];
-			let (idx, grip) = (f.idx, f.grips[frng.below(f.grips.len() as u32) as usize].0);
-			let c = &cells[idx];
+			let with_grips: Vec<_> = frames.iter().filter(|f| !f.grips.is_empty()).collect();
+			let f = with_grips[frng.below(with_grips.len() as u32) as usize];
+			let grip = f.grips[frng.below(f.grips.len() as u32) as usize].0;
+			let (_, [l, t, w, h]) = groups.iter().find(|(g, _)| g.id == f.gid).expect("a frame with grips is a live group");
 			// Where the grip sits on the tile: its corner, or the middle of the edge it is.
-			let (r, b) = (ox + (c.x + c.w) as f64 * sw, oy + (c.y + c.h) as f64 * sh);
-			let mid_y = oy + (c.y as f64 + c.h as f64 / 2.0) * sh;
+			let (r, b) = (l + w, t + h);
+			let mid_y = t + h / 2.0;
 			let start = match grip {
 				Grip::Corner => (r, b),
-				Grip::Left => (ox + c.x as f64 * sw, mid_y),
+				Grip::Left => (*l, mid_y),
 				Grip::Right => (r, mid_y),
 				// Their middles, as the stylesheet places them: just before the view's last two grip-thicknesses
 				// (an eighth of the title bar each) and 1px border.
-				Grip::Wall => (ox + world.size.0 - 1.0 - world.state.title_h() * 5.0 / 16.0, mid_y),
-				Grip::Bottom => (ox + (c.x as f64 + c.w as f64 / 2.0) * sw, b),
-				Grip::Fold => (
-					ox + (c.x as f64 + c.w as f64 / 2.0) * sw,
-					world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 5.0 / 16.0,
-				),
+				Grip::Wall => (world.origin.0 + world.size.0 - 1.0 - world.state.title_h() * 5.0 / 16.0, mid_y),
+				Grip::Bottom => (l + w / 2.0, b),
+				Grip::Fold => (l + w / 2.0, world.origin.1 + world.size.1 - 1.0 - world.state.title_h() * 5.0 / 16.0),
 			};
 			let to = aim(frng, world);
 			Action::Resize {
-				idx,
+				group: f.gid,
 				grip,
 				start,
 				path: path(frng, start, to, true),
@@ -413,34 +473,35 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 			Action::Scroll { at: (x, y) }
 		}
 		SET_MINS => {
-			let c = &cells[frng.below(cells.len() as u32) as usize];
+			let (g, _) = &groups[frng.below(groups.len() as u32) as usize];
 			Action::SetMins {
-				panel: c.group.tabs[frng.below(c.group.tabs.len() as u32) as usize].clone(),
+				locked: frng.below(8) == 0,
+				panel: g.tabs[frng.below(g.tabs.len() as u32) as usize].clone(),
 				// Drawn against the whole band, not the tile — a floor wider than what's left of the row
 				// is the case only a re-floor can reach, and the one that must clamp rather than spill.
 				min: min(frng, world.state.cols(), world.state.rows()),
 			}
 		}
 		DRAG_ENTER_TAB => {
-			let c = &cells[frng.below(cells.len() as u32) as usize];
-			let panel = c.group.tabs[frng.below(c.group.tabs.len() as u32) as usize].clone();
+			let (g, _) = &groups[frng.below(groups.len() as u32) as usize];
+			let panel = g.tabs[frng.below(g.tabs.len() as u32) as usize].clone();
 			// Some are stale: the tab under a gid that never existed, or under another tile.
 			let group = match frng.below(8) {
 				0 => GroupId(u64::MAX),
 				1 => pick_group(frng, world),
-				_ => c.group.id,
+				_ => g.id,
 			};
 			Action::DragEnterTab { group, panel }
 		}
 		CARRY => {
-			let panel = match cells.is_empty() || frng.below(3) != 0 {
+			let panel = match groups.is_empty() || frng.below(3) != 0 {
 				true => {
 					let (w, h) = (1 + frng.below(world.state.cols().div_euclid(2)), 1 + frng.below(world.state.rows().div_euclid(2)));
 					Carried::New { w, h, min: min(frng, w, h) }
 				}
 				false => {
-					let c = &cells[frng.below(cells.len() as u32) as usize];
-					Carried::Hosted(c.group.tabs[frng.below(c.group.tabs.len() as u32) as usize].clone())
+					let (g, _) = &groups[frng.below(groups.len() as u32) as usize];
+					Carried::Hosted(g.tabs[frng.below(g.tabs.len() as u32) as usize].clone())
 				}
 			};
 			let from = aim(frng, world);
@@ -455,6 +516,50 @@ pub fn generate(frng: &mut Frng, world: &World, weights: &[u32; N_KINDS]) -> Opt
 		}
 		_ => unreachable!("kind is one of the constants pushed into `avail`"),
 	})
+}
+
+/// A float's grip moves its own rect alone, never a tile, with a grip's edge rules: only its edge moves,
+/// a wall or fold only shrinks, and where it ends is a function of the pointer alone.
+fn float_resize(group: GroupId, grip: Grip, start: (f64, f64), path: &[(f64, f64)], press: &[Cell], world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
+	let shown = |w: &World| {
+		let frames = w.state.frames(&HashMap::new());
+		oracle::rect(&frames.iter().find(|f| f.gid == group).expect("a float in the layout renders").style).expect("a float shows at a px rect")
+	};
+	let [l0, t0, w0, h0] = shown(world);
+	for p in path {
+		world.cursor = *p;
+		world.state.resize_move(*p);
+		oracle::check_in_flight(world)?;
+		if world.state.grid().cells != press {
+			return Err(format!("float {group:?}'s {grip:?} grip moved tiles"));
+		}
+		let [l, t, w, h] = shown(world);
+		let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+		let kept = match grip {
+			Grip::Left => near(l + w, l0 + w0) && near(t, t0) && near(h, h0),
+			Grip::Right => near(l, l0) && near(t, t0) && near(h, h0),
+			Grip::Wall => near(l, l0) && near(t, t0) && near(h, h0) && w <= w0 + 1e-6,
+			Grip::Bottom => near(l, l0) && near(t, t0) && near(w, w0),
+			Grip::Fold => near(l, l0) && near(t, t0) && near(w, w0) && h <= h0 + 1e-6,
+			Grip::Corner => near(l, l0) && near(t, t0),
+		};
+		if !kept {
+			return Err(format!("float {group:?}'s {grip:?} grip moved more than its edge: {:?} → {:?}", [l0, t0, w0, h0], [l, t, w, h]));
+		}
+		mid(world);
+	}
+	if let Some(&last) = path.last() {
+		let there = shown(world);
+		world.state.resize_move(start);
+		if shown(world) != [l0, t0, w0, h0] {
+			return Err(format!("back at the press point, float {group:?}'s {grip:?} grip left {:?}", shown(world)));
+		}
+		world.state.resize_move(last);
+		if shown(world) != there {
+			return Err(format!("returning to {last:?} via the press point moved float {group:?} elsewhere"));
+		}
+	}
+	Ok(())
 }
 
 /// Every leaf of the default keymap as the chords reaching it, so a new bind is fuzzed without
@@ -525,7 +630,7 @@ fn min(frng: &mut Frng, w: u32, h: u32) -> MinSize {
 fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
 	let panel = match panel {
 		Carried::New { w, h, min } => {
-			let id = world.mint_panel(*min);
+			let id = world.mint_panel(*min, false);
 			world.state.carry(id.clone(), *w, *h);
 			id
 		}
@@ -560,7 +665,14 @@ fn carry(panel: &Carried, path: &[(f64, f64)], out: Option<usize>, commit: bool,
 	}
 	world.structural_edit();
 	world.state.drag_release();
-	let hosts = world.state.grid().cells.iter().filter(|c| c.group.tabs.contains(&panel)).count();
+	let g = world.state.grid();
+	let hosts = g
+		.cells
+		.iter()
+		.map(|c| &c.group)
+		.chain(g.floats.iter().map(|f| &f.group))
+		.filter(|g| g.tabs.contains(&panel))
+		.count();
 	match (inside, hosts) {
 		(false, _) if world.state.grid() != &before => Err("a carry released outside the dock changed the layout".to_string()),
 		(true, 1) | (false, _) => Ok(()),
@@ -587,6 +699,11 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 		return Err("a press mutated the layout".to_string());
 	}
 	let took = world.state.dragging(); // a press mid-resize is refused
+	if let Grab::Tile { gid, .. } = grab
+		&& before.floats.iter().any(|f| f.group.id == *gid)
+	{
+		return float_move(*gid, path, commit, &before, world, mid);
+	}
 
 	world.resolved.clear();
 	let mut armed = false;
@@ -597,8 +714,9 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 		// The ghost is the public witness of arming, so the fuzzer never has to know the threshold.
 		if world.state.ghost(&titles).is_some() {
 			armed = true;
-			let t = resolve(world, &source, grab_offset(grab), *p);
-			world.resolved.push(t);
+			if let Some(t) = resolve(world, &source, grab_offset(grab), *p) {
+				world.resolved.push(t);
+			}
 		}
 		mid(world);
 	}
@@ -632,6 +750,9 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 		for (e, a) in expect.cells.iter_mut().zip(&world.state.grid().cells) {
 			e.group.active = a.group.active;
 		}
+		for (e, a) in expect.floats.iter_mut().zip(&world.state.grid().floats) {
+			e.group.active = a.group.active;
+		}
 		if world.state.grid() != &expect {
 			return Err(format!("unarmed release changed more than the active tab: {:?} vs {:?}", world.state.grid().cells, before.cells));
 		}
@@ -642,17 +763,50 @@ fn drag(grab: &Grab, path: &[(f64, f64)], commit: bool, world: &mut World, mid: 
 /// Re-run the pure `resolve_target` the way `drag_move` does, purely to tally what the pointer
 /// actually reached. It mirrors the reducer's block-centre math; drift makes the *tally* wrong, not
 /// the run — no invariant reads it.
-fn resolve(world: &World, source: &DragSource, grab: (f64, f64), cursor: (f64, f64)) -> DropTarget {
+fn resolve(world: &World, source: &DragSource, grab: (f64, f64), cursor: (f64, f64)) -> Option<DropTarget> {
 	let grid = world.state.grid();
 	let (sw, sh) = world.shown_step();
 	let (ox, oy) = (world.origin.0 - world.scroll.0, world.origin.1 - world.scroll.1);
-	let c = grid
-		.cells
-		.iter()
-		.find(|c| c.group.id == source_group(source))
-		.expect("the drag source is live for the whole gesture");
+	let c = grid.cells.iter().find(|c| c.group.id == source_group(source))?; // a float docking: not tallied
 	let (cx, cy) = (cursor.0 - grab.0 + c.w as f64 * sw / 2.0, cursor.1 - grab.1 + c.h as f64 * sh / 2.0);
-	grid.resolve_target(source, cx - ox, cy - oy, cursor.0 - ox, cursor.1 - oy, sw, sh, CHROME_H, world.state.cols(), c.w, c.h)
+	Some(grid.resolve_target(source, cx - ox, cy - oy, cursor.0 - ox, cursor.1 - oy, sw, sh, CHROME_H, world.state.cols(), c.w, c.h))
+}
+
+/// A float pressed by its header moves alone: no tile, no other float, nothing in it changes, and a
+/// cancel puts it back where it was.
+fn float_move(gid: GroupId, path: &[(f64, f64)], commit: bool, before: &PackedGrid, world: &mut World, mid: &mut dyn FnMut(&World)) -> Result<(), String> {
+	let only_moved = |now: &PackedGrid| {
+		let mut expect = before.clone();
+		for (e, a) in expect.floats.iter_mut().zip(&now.floats) {
+			if e.group.id == gid {
+				(e.x, e.y) = (a.x, a.y);
+			}
+		}
+		now == &expect
+	};
+	for p in path {
+		world.cursor = *p;
+		world.state.drag_move(*p);
+		oracle::check_in_flight(world)?;
+		if !only_moved(world.state.grid()) {
+			return Err(format!("moving float {gid:?} changed more than where it is: {:?}", world.state.grid().floats));
+		}
+		mid(world);
+	}
+	if !commit {
+		world.state.drag_cancel();
+		return if world.state.grid() == before {
+			Ok(())
+		} else {
+			Err(format!("cancelling float {gid:?}'s move left it moved"))
+		};
+	}
+	world.structural_edit();
+	world.state.drag_release();
+	if !only_moved(world.state.grid()) {
+		return Err(format!("releasing float {gid:?} changed more than where it is"));
+	}
+	Ok(())
 }
 
 fn source_group(source: &DragSource) -> GroupId {
@@ -794,6 +948,26 @@ fn path(frng: &mut Frng, start: (f64, f64), to: (f64, f64), arm: bool) -> Vec<(f
 }
 
 fn pick_group(frng: &mut Frng, world: &World) -> GroupId {
-	let cells = &world.state.grid().cells;
-	cells[frng.below(cells.len() as u32) as usize].group.id
+	let groups = groups(world);
+	groups[frng.below(groups.len() as u32) as usize].0.id
+}
+
+/// Every group with the client-px rect it shows at, `[left, top, width, height]`: tiles' from the grid,
+/// floats' from their frames, which hold them in the view. A group a maximized one hides is skipped: a
+/// pointer can't reach it.
+fn groups(world: &World) -> Vec<(Group, [f64; 4])> {
+	let (sw, sh) = world.shown_step();
+	let (ox, oy) = (world.origin.0 - world.scroll.0, world.origin.1 - world.scroll.1);
+	let g = world.state.grid();
+	let frames = world.state.frames(&HashMap::new());
+	let tiles = g
+		.cells
+		.iter()
+		.filter(|c| frames.iter().any(|f| f.gid == c.group.id))
+		.map(|c| (c.group.clone(), [ox + c.x as f64 * sw, oy + c.y as f64 * sh, c.w as f64 * sw, c.h as f64 * sh]));
+	let floats = g.floats.iter().filter_map(|f| {
+		let [l, t, w, h] = oracle::rect(&frames.iter().find(|fr| fr.gid == f.group.id)?.style)?;
+		Some((f.group.clone(), [world.origin.0 + l, world.origin.1 + t, w, h]))
+	});
+	tiles.chain(floats).collect()
 }

@@ -1,3 +1,4 @@
+#![feature(default_field_values)]
 //! `tilers_leptos` — the Leptos binding for the [`tilers_core`] packed-grid tiling
 //! layout. Same shape as the Dioxus binding, Leptos idioms: one `RwSignal<PackedState>` (thread-
 //! local storage, since [`PackedState`] holds `Rc`s and so is

@@ -7,7 +7,7 @@ test('a native drag entering an inactive tab opens it', async ({ page }) => {
 	await page.goto('/')
 	await page.waitForSelector('.tl-header', { timeout: 30_000 })
 	const header = page.locator('.tl-header').first()
-	await header.getByTitle('Add window as a tab').click()
+	await header.getByTitle('Add a tab').click()
 	await page.getByRole('button', { name: 'Console', exact: true }).click()
 	await expect(header.locator('.tl-tab')).toHaveCount(2)
 	const tab = header.locator('.tl-tab:not(.tl-active)')

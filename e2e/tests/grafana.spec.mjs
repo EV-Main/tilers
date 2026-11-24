@@ -76,7 +76,7 @@ test('a closed panel reopens from a tile’s +', async ({ page }) => {
 	const tile = (title) => page.locator('.tl-tile', { has: tab(page, title) })
 	await tile('Flux').locator('button[title="Close"]').click()
 	await expect(page.locator('.tl-tile')).toHaveCount(PANELS - 1)
-	await tile('Switch').locator('button[title="Add window as a tab"]').click()
+	await tile('Switch').locator('button[title="Add a tab"]').click()
 	await expect(page.getByRole('menuitem')).toHaveText(['Flux · AA'])
 	await page.getByRole('menuitem', { name: 'Flux · AA' }).click()
 	await expect(tile('Switch').locator('.tl-tab')).toHaveText(['Switch · AA', 'Flux · AA'])

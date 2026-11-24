@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use dioxus::{html::input_data::MouseButton, prelude::*};
-use tilers_core::{Band, CSS, Config, Group, GroupId, MinSize, PackedState, PanelId};
+use tilers_core::{Band, CSS, Config, Declared, Frame, Group, GroupId, PackedState, PanelId};
 
 use crate::panel::DockPanel;
 
@@ -24,16 +24,30 @@ pub struct PackedApi {
 impl PackedApi {
 	/// `group`'s panels must already be in `panels`: their declared mins floor the tile.
 	pub fn place(&mut self, group: Group, w: u32, h: u32) {
-		let mins = mins_of(&self.panels.peek());
+		let declared = declared(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_mins(mins);
+		s.set_panels(declared);
 		s.place(group, w, h);
 	}
 
-	pub fn add_tab(&mut self, group: GroupId, panel: PanelId) {
-		let mins = mins_of(&self.panels.peek());
+	/// Open `group` floating above the grid at a wanted `w×h`: centered in the view, on top, focused.
+	/// Its panels must already be in `panels`.
+	pub fn float(&mut self, group: Group, w: u32, h: u32) {
+		let declared = declared(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_mins(mins);
+		s.set_panels(declared);
+		s.float(group, w, h);
+	}
+
+	/// Float tile `group` out where it shows, or dock a float where it shows.
+	pub fn toggle_float(&mut self, group: GroupId) {
+		self.state.write().toggle_float(group);
+	}
+
+	pub fn add_tab(&mut self, group: GroupId, panel: PanelId) {
+		let declared = declared(&self.panels.peek());
+		let mut s = self.state.write();
+		s.set_panels(declared);
 		s.add_tab(group, panel);
 	}
 
@@ -41,13 +55,13 @@ impl PackedApi {
 	/// `w×h` tile or a tab of the strip it drops on; a panel already hosted moves there. Call it from
 	/// the drag source's `ondragstart`. `panel` must already be in `panels`.
 	pub fn carry(&mut self, panel: PanelId, w: u32, h: u32) {
-		let mins = mins_of(&self.panels.peek());
+		let declared = declared(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_mins(mins);
+		s.set_panels(declared);
 		s.carry(panel, w, h);
 	}
 
-	/// Close `panel`'s tab, and its tile with its last one.
+	/// Close `panel`'s tab, and its tile with its last one. A locked panel too: the lock holds the user, not the host.
 	pub fn close(&mut self, panel: &PanelId) {
 		self.state.write().close(panel);
 	}
@@ -61,11 +75,6 @@ impl PackedApi {
 	/// width it opens back to. A click on a spine opens it too.
 	pub fn collapse(&mut self, group: GroupId) {
 		self.state.write().collapse(group);
-	}
-
-	/// The keybinds, aimed at `group`.
-	pub fn help(&mut self, group: GroupId) {
-		self.state.write().open_help(group);
 	}
 
 	pub fn resize(&mut self, idx: usize, new_w: u32, new_h: u32) {
@@ -95,7 +104,8 @@ impl PackedApi {
 	/// Whether `on_band`'s invocation follows a restore from the seed cache. Only meaningful inside
 	/// `on_band` — a fresh band arrives with an empty grid, and anything the host places fills it.
 	pub fn restored(&self) -> bool {
-		!self.state.read().grid().cells.is_empty()
+		let s = self.state.read();
+		!(s.grid().cells.is_empty() && s.grid().floats.is_empty())
 	}
 
 	/// Wipe the layout back to empty (a host re-seeding a fresh band).
@@ -103,10 +113,17 @@ impl PackedApi {
 		self.state.write().reset();
 	}
 
-	/// Every panel id the live layout hosts, in cell/tab order — for a host rebuilding its panel
-	/// list from a restored layout.
+	/// Every panel id the live layout hosts, tiles' then floats', in tab order — for a host rebuilding
+	/// its panel list from a restored layout.
 	pub fn tab_ids(&self) -> Vec<PanelId> {
-		self.state.read().grid().cells.iter().flat_map(|c| c.group.tabs.iter().cloned()).collect()
+		let s = self.state.read();
+		let g = s.grid();
+		g.cells
+			.iter()
+			.map(|c| &c.group)
+			.chain(g.floats.iter().map(|f| &f.group))
+			.flat_map(|g| g.tabs.iter().cloned())
+			.collect()
 	}
 
 	/// Serialize the current layout.
@@ -117,9 +134,9 @@ impl PackedApi {
 	/// Replace the layout with a previously [`save`](Self::save)d one; errors on a corrupt or
 	/// future-version payload. Every panel it hosts must already be in `panels`.
 	pub fn load(&mut self, json: &str) -> Result<(), tilers_core::model::serial::LoadError> {
-		let mins = mins_of(&self.panels.peek());
+		let declared = declared(&self.panels.peek());
 		let mut s = self.state.write();
-		s.set_mins(mins);
+		s.set_panels(declared);
 		s.load(json)
 	}
 
@@ -138,13 +155,21 @@ impl PackedApi {
 ///   again on every band crossing — *after* the framework has resolved that band's seed cache.
 ///   [`PackedApi::restored`] says whether it found one; if not, the grid is empty and the host is
 ///   expected to place its tiles (or load its own default) against the now-real step size.
-/// - `actions`: what a tile's header holds right of its tabs, per tile; `None` leaves it bare. A press
-///   anywhere in it is never the tile's. It runs inside this component's render, so hooks belong in a
-///   component it returns.
+/// - A tile's header is the framework's: its tabs (each with its `×`), then `?`, `+`, float/dock and
+///   close. `actions` adds the host's own buttons before those, per tile; it never replaces or hides
+///   them — a panel's [`DockPanel::locked`] does that. A press anywhere in them is never the tile's.
+///   It runs inside this component's render, so hooks belong in a component it returns.
+/// - `on_add`: the header's `+` asks the host to open a tab in that tile; without it there is no `+`.
 #[component]
-pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<PackedApi>>, config: Option<Config>, actions: Option<Callback<Tile, Element>>) -> Element {
+pub fn PackedArea(
+	panels: Signal<Vec<DockPanel>>,
+	on_band: Option<Callback<PackedApi>>,
+	config: Option<Config>,
+	actions: Option<Callback<Tile, Element>>,
+	on_add: Option<Callback<GroupId>>,
+) -> Element {
 	let cfg = config.unwrap_or_default();
-	let (title_h_rem, scroll_x) = (cfg.title_h_rem, cfg.scroll_x);
+	let scroll_x = cfg.scroll_x;
 	// Root-scope, not this scope: `PackedApi` is driven from outside `PackedArea`'s subtree, so the
 	// cell must outlive this component (this root component never unmounts).
 	let mut state = use_hook(move || Signal::new_in_scope(PackedState::new(cfg), ScopeId::ROOT));
@@ -270,10 +295,10 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 		frames.0.take(); // the closure holds `request`, which holds the closure
 	});
 
-	// A panel's declared min is host intent the state re-derives floors from.
+	// A panel's declaration is host intent the state re-derives floors and locks from.
 	use_effect(move || {
-		let mins = mins_of(&panels.read());
-		state.write().set_mins(mins);
+		let declared = declared(&panels.read());
+		state.write().set_panels(declared);
 	});
 
 	// Undo history: snapshot a settled layout after each structural edit. `wants_undo_snapshot` is
@@ -296,14 +321,143 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 	let dragging = state.read().dragging();
 	let carrying = state.read().carrying();
 	let resizing = state.read().resizing();
+	let root_style = state.read().root_style();
 	let panel_list = panels.read().clone();
+
+	let render = |frame: &Frame| -> Element {
+		let gid = frame.gid;
+		let class = [
+			Some("tl-tile"),
+			frame.shadow.then_some("tl-shadow"),
+			frame.collapsed.then_some("tl-collapsed"),
+			frame.floating.then_some("tl-float"),
+			frame.locked.then_some("tl-locked"),
+		]
+		.into_iter()
+		.flatten()
+		.collect::<Vec<_>>()
+		.join(" ");
+		rsx! {
+			div { key: "{gid.0}", class, style: "{frame.style}",
+				if !frame.shadow {
+					div { class: "tl-group",
+						div {
+							class: if frame.tab_drop { "tl-header tl-tab-drop" } else { "tl-header" },
+							"data-dvg": "{gid.0}",
+							onpointerdown: move |e: PointerEvent| {
+								if e.trigger_button() != Some(MouseButton::Primary) {
+									return;
+								}
+								e.stop_propagation();
+								let c = e.client_coordinates();
+								let g = e.element_coordinates();
+								state.write().press_tile(gid, (c.x, c.y), (g.x, g.y));
+							},
+							for tab in frame.tabs.iter() {
+								div {
+									key: "{tab.id.0}",
+									"data-panel": "{tab.id.0}",
+									class: if tab.active { "tl-tab tl-active" } else { "tl-tab" },
+									onpointerdown: {
+										let id = tab.id.clone();
+										move |e: PointerEvent| {
+											if e.trigger_button() != Some(MouseButton::Primary) {
+												return;
+											}
+											e.stop_propagation();
+											if on_control(&e) {
+												return;
+											}
+											let c = e.client_coordinates();
+											let g = e.element_coordinates();
+											state.write().press_tab(id.clone(), gid, (c.x, c.y), (g.x, g.y));
+										}
+									},
+									ondragenter: {
+										let id = tab.id.clone();
+										move |_| state.write().drag_enter_tab(gid, &id)
+									},
+									match labels.get(&tab.id) {
+										Some(label) => label.clone(),
+										None => rsx! { "{tab.title}" },
+									}
+									if !tab.locked {
+										button {
+											class: "tl-tab-close",
+											title: "Close tab",
+											onclick: {
+												let id = tab.id.clone();
+												move |_| state.write().close(&id)
+											},
+											"×"
+										}
+									}
+								}
+							}
+							div { class: "tl-actions", onpointerdown: |e: PointerEvent| e.stop_propagation(),
+								if let Some(actions) = actions {
+									{
+										actions
+											.call(Tile {
+												group: gid,
+												active: frame.tabs.iter().find(|t| t.active).expect("a tile shows one active tab").id.clone(),
+												maximized: frame.maximized,
+												collapsed: frame.collapsed,
+												floating: frame.floating,
+												api,
+											})
+									}
+								}
+								button { class: "tl-action", title: "Keybinds", onclick: move |_| state.write().open_help(gid), "?" }
+								if let Some(on_add) = on_add {
+									button { class: "tl-action", title: "Add a tab", onclick: move |_| on_add.call(gid), "+" }
+								}
+								if !frame.locked {
+									button {
+										class: "tl-action",
+										title: if frame.floating { "Dock" } else { "Float" },
+										onclick: move |_| state.write().toggle_float(gid),
+										if frame.floating { "⊟" } else { "⧉" }
+									}
+									button { class: "tl-action", title: "Close", onclick: move |_| state.write().close_tile(gid), "✕" }
+								}
+							}
+						}
+						div { class: "tl-content-slot" }
+					}
+					for (grip , style) in frame.grips.iter().cloned() {
+						div {
+							class: grip.class(),
+							style,
+							onpointerdown: move |e: PointerEvent| {
+								if e.trigger_button() != Some(MouseButton::Primary) {
+									return;
+								}
+								e.stop_propagation();
+								// Capture the pointer: moves keep streaming past the window bottom while the button is
+								// held, so the tile stretches below the fold (the root's `overflow-y: auto` then scrolls).
+								capture_pointer(&e);
+								let c = e.client_coordinates();
+								state.write().resize_start(gid, grip, c.x, c.y);
+							},
+							onpointermove: move |e: PointerEvent| {
+								let c = e.client_coordinates();
+								state.write().resize_move((c.x, c.y));
+							},
+							onpointerup: move |_| state.write().resize_end(),
+							onpointercancel: move |_| state.write().resize_end(),
+						}
+					}
+				}
+			}
+		}
+	};
 
 	rsx! {
 		style { dangerous_inner_html: CSS }
 		div {
 			class: if scroll_x { "tl-packed tl-scroll-x" } else { "tl-packed" },
-			// The stylesheet's one knob for the chrome band; the state resolves the same rem to px.
-			style: "--tl-title-h: {title_h_rem}rem;",
+			style: root_style,
 			onmounted: move |e| {
 				#[cfg(target_arch = "wasm32")]
 				{
@@ -362,108 +516,8 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 				}
 			},
 
-			for frame in frames.iter() {
-				div {
-					key: "{frame.gid.0}",
-					class: match (frame.shadow, frame.collapsed) {
-						(true, _) => "tl-tile tl-shadow",
-						(false, true) => "tl-tile tl-collapsed",
-						(false, false) => "tl-tile",
-					},
-					"data-panel": frame.tabs.iter().find(|t| t.active).map(|t| t.id.0.clone()),
-					style: "{frame.style}",
-					if !frame.shadow {
-						div { class: "tl-group",
-							div {
-								class: if frame.tab_drop { "tl-header tl-tab-drop" } else { "tl-header" },
-								"data-dvg": "{frame.gid.0}",
-								onpointerdown: {
-									let gid = frame.gid;
-									move |e: PointerEvent| {
-										if e.trigger_button() != Some(MouseButton::Primary) {
-											return;
-										}
-										e.stop_propagation();
-										let c = e.client_coordinates();
-										let g = e.element_coordinates();
-										state.write().press_tile(gid, (c.x, c.y), (g.x, g.y));
-									}
-								},
-								for tab in frame.tabs.iter() {
-									div {
-										key: "{tab.id.0}",
-										"data-panel": "{tab.id.0}",
-										class: if tab.active { "tl-tab tl-active" } else { "tl-tab" },
-										onpointerdown: {
-											let (id, from) = (tab.id.clone(), frame.gid);
-											move |e: PointerEvent| {
-												if e.trigger_button() != Some(MouseButton::Primary) {
-													return;
-												}
-												e.stop_propagation();
-												if on_control(&e) {
-													return;
-												}
-												let c = e.client_coordinates();
-												let g = e.element_coordinates();
-												state.write().press_tab(id.clone(), from, (c.x, c.y), (g.x, g.y));
-											}
-										},
-										ondragenter: {
-											let (id, from) = (tab.id.clone(), frame.gid);
-											move |_| state.write().drag_enter_tab(from, &id)
-										},
-										match labels.get(&tab.id) {
-											Some(label) => label.clone(),
-											None => rsx! { "{tab.title}" },
-										}
-									}
-								}
-								if let Some(actions) = actions {
-									div { class: "tl-actions", onpointerdown: |e: PointerEvent| e.stop_propagation(),
-										{
-											actions
-												.call(Tile {
-													group: frame.gid,
-													active: frame.tabs.iter().find(|t| t.active).expect("a tile shows one active tab").id.clone(),
-													maximized: frame.maximized,
-													collapsed: frame.collapsed,
-													api,
-												})
-										}
-									}
-								}
-							}
-							div { class: "tl-content-slot" }
-						}
-						for (grip, style) in frame.grips.iter().cloned() {
-							div {
-								class: grip.class(),
-								style,
-								onpointerdown: {
-									let idx = frame.idx;
-									move |e: PointerEvent| {
-										if e.trigger_button() != Some(MouseButton::Primary) {
-											return;
-										}
-										e.stop_propagation();
-										// Capture the pointer: moves keep streaming past the window bottom while the button is
-										// held, so the tile stretches below the fold (the root's `overflow-y: auto` then scrolls).
-										capture_pointer(&e);
-										let c = e.client_coordinates();
-										state.write().resize_start(idx, grip, c.x, c.y);
-									}
-								},
-								onpointermove: move |e: PointerEvent| {
-									let c = e.client_coordinates();
-									state.write().resize_move((c.x, c.y));
-								},
-								onpointerup: move |_| state.write().resize_end(),
-								onpointercancel: move |_| state.write().resize_end(),
-							}
-						}
-					}
-				}
+			for frame in frames.iter().filter(|f| !f.floating) {
+				{render(frame)}
 			}
 
 			div { class: "tl-overlay",
@@ -484,6 +538,12 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 						},
 						{panel.content.clone()}
 					}
+				}
+			}
+
+			div { class: "tl-floats",
+				for frame in frames.iter().filter(|f| f.floating) {
+					{render(frame)}
 				}
 			}
 
@@ -559,7 +619,7 @@ pub fn PackedArea(panels: Signal<Vec<DockPanel>>, on_band: Option<Callback<Packe
 		}
 	}
 }
-/// What [`PackedArea`]'s `actions` renders for: one tile, and the handle to act on it.
+/// What [`PackedArea`]'s `actions` renders for: one tile or float, and the handle to act on it.
 #[derive(Clone, PartialEq)]
 pub struct Tile {
 	pub group: GroupId,
@@ -568,6 +628,8 @@ pub struct Tile {
 	pub maximized: bool,
 	/// Showing as a spine.
 	pub collapsed: bool,
+	/// Above the grid.
+	pub floating: bool,
 	pub api: PackedApi,
 }
 
@@ -594,8 +656,8 @@ fn on_control(e: &PointerEvent) -> bool {
 	}
 }
 
-fn mins_of(panels: &[DockPanel]) -> HashMap<PanelId, MinSize> {
-	panels.iter().map(|p| (p.id.clone(), p.min)).collect()
+fn declared(panels: &[DockPanel]) -> HashMap<PanelId, Declared> {
+	panels.iter().map(|p| (p.id.clone(), Declared { min: p.min, locked: p.locked })).collect()
 }
 
 /// Read the root's `getBoundingClientRect` origin + content box (`clientWidth/Height`, which
@@ -612,8 +674,8 @@ fn measure(el: &web_sys::Element, mut state: Signal<PackedState>, api: PackedApi
 		if let Some(cb) = on_band {
 			cb.call(api);
 		}
-		let mins = mins_of(&api.panels.peek());
-		state.write().set_mins(mins);
+		let declared = declared(&api.panels.peek());
+		state.write().set_panels(declared);
 	}
 }
 

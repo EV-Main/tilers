@@ -20,8 +20,8 @@ pub use config::{Band, Config};
 pub use css::CSS;
 pub use model::{
 	Group, GroupId, PanelId,
-	packed::{MinSize, PackedGrid, Step},
+	packed::{Floating, MinSize, PackedGrid, Step},
 };
 #[cfg(target_arch = "wasm32")]
 pub use state::framed;
-pub use state::{ContentSlot, Frame, Ghost, Grip, Notice, PackedState};
+pub use state::{ContentSlot, Declared, Frame, Ghost, Grip, Notice, PackedState};

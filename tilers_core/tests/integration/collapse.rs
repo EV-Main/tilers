@@ -1,7 +1,7 @@
 //! A collapsed tile is a spine as wide as the title bar is tall: it keeps the width it opens back to,
 //! takes a drop anywhere along it, and a click opens it.
 
-use tilers_core::{Config, Group, GroupId, MinSize, PackedState, PanelId};
+use tilers_core::{Config, Declared, Group, GroupId, MinSize, PackedState, PanelId};
 
 const WIDTH: f64 = 1600.0;
 
@@ -12,7 +12,20 @@ fn id(s: &str) -> PanelId {
 /// Two half-width tiles side by side, `a` then `b`; `c` is declared but not hosted.
 fn seeded() -> (PackedState, GroupId, GroupId) {
 	let mut s = PackedState::new(Config::default());
-	s.set_mins(["a", "b", "c"].into_iter().map(|p| (id(p), MinSize::Px { w: 0.0, h: 0.0 })).collect());
+	s.set_panels(
+		["a", "b", "c"]
+			.into_iter()
+			.map(|p| {
+				(
+					id(p),
+					Declared {
+						min: MinSize::Px { w: 0.0, h: 0.0 },
+						locked: false,
+					},
+				)
+			})
+			.collect(),
+	);
 	s.set_measure((0.0, 0.0), (WIDTH, 900.0), false);
 	assert_eq!(s.take_band(), Some(false), "first measure is a miss natively");
 	let gids = ["a", "b"].map(|p| {
