@@ -62,9 +62,8 @@ pub const CSS: &str = r#"
 /* Pinned to half the title bar, so the grab corner keeps its proportion at any chrome height. */
 .tl-resize-handle { position: absolute; right: 0; bottom: 0;
 	width: calc(var(--tl-title-h, 2rem) / 2); height: calc(var(--tl-title-h, 2rem) / 2);
-	cursor: nwse-resize; z-index: 101;
-	/* opaque where a scrollbar still runs under it (no track margins outside Chromium/WebKit) */
-	background: linear-gradient(var(--tl-resize-bg, #555), var(--tl-resize-bg, #555)), var(--tl-group-bg, #1e1e1e); }
+	cursor: nwse-resize; z-index: 101; opacity: 0.6; }
+.tl-resize-handle:hover { opacity: 1; }
 /* The edge grips: thin strips over the content's own edges, bare until hovered. */
 .tl-resize-bottom, .tl-resize-fold, .tl-resize-left, .tl-resize-right, .tl-resize-wall { position: absolute; z-index: 100; }
 .tl-resize-bottom { left: 0; right: 0; bottom: 0; height: calc(var(--tl-title-h, 2rem) / 8); cursor: ns-resize; }
@@ -86,8 +85,8 @@ pub const CSS: &str = r#"
 .tl-render-overlay ::-webkit-scrollbar-track:vertical { margin-bottom: calc(var(--tl-title-h, 2rem) / 2); }
 .tl-render-overlay ::-webkit-scrollbar-track:horizontal { margin-right: calc(var(--tl-title-h, 2rem) / 2); }
 .tl-render-overlay ::-webkit-scrollbar-corner { background: transparent; }
-.tl-resize-handle::after { content: "⌟"; position: absolute; right: 0.08em; bottom: -0.23em;
-	font-size: calc(var(--tl-title-h, 2rem) / 2); line-height: 1; color: var(--tl-fg, #ddd); }
+.tl-resize-handle::after { content: ""; position: absolute; inset: 0; background: var(--tl-fg, #ddd);
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'%3E%3Cpath d='M20 14l-6 6M20 8 8 20'/%3E%3C/svg%3E") center / contain no-repeat; }
 /* Horizontal is fully model-bounded (every tile satisfies x + w ≤ cols), so a horizontal
    scrollbar is never legitimate — clip it. Only the vertical axis (whitespace/stack below) scrolls. */
 .tl-packed { position: relative; width: 100%; height: 100%; overflow-x: hidden; overflow-y: auto;
