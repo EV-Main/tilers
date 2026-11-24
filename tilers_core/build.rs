@@ -8,6 +8,12 @@ fn main() {
 }
 
 fn git_version() {
+	// a dev build's script never reruns for a commit: each rerun recompiles the package and relinks its tests
+	if std::env::var("PROFILE").as_deref() != Ok("release") {
+		println!("cargo:rerun-if-changed=build.rs");
+		println!("cargo:rustc-env=GIT_HASH=dev");
+		return;
+	}
 	// resolved by git: the package dir need not be the repo root, and in a worktree `.git` is a file.
 	// This checkout's HEAD reflog moves on its every commit/checkout/reset; `refs/` is shared by all worktrees, so watching it rebuilt every checkout on any agent's commit.
 	if let Some(paths) = std::process::Command::new("git")
@@ -35,8 +41,8 @@ fn git_version() {
 }
 
 fn log_directives() {
-	// a missing file named here makes cargo treat the script as always dirty; the directory is scanned instead
-	println!("cargo:rerun-if-changed=.cargo");
+	// a missing path named here leaves the script dirty on every build: without `.cargo`, the package dir (cargo's own default) is watched for it to appear
+	println!("cargo:rerun-if-changed={}", if std::path::Path::new(".cargo").exists() { ".cargo" } else { "." });
 	if let Ok(directives) = std::fs::read_to_string(".cargo/log_directives") {
 		let directives = directives.trim();
 		if !directives.is_empty() {
