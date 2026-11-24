@@ -57,3 +57,4 @@ sim 1 15 3940279394  # a frame's width summed from its edges drifted a ulp from 
 sim 14458307914909991952 27 3940279394  # docking a float onto a header joins that tile, which the check read as losing its panels
 sim 1062 81 3387673292  # a float's resize held across a view change re-clamped its stored rect to the new view
 sim 5663 250 3387673292  # a click aimed at a spine a maximized pane hides, which no pointer can reach, opened it
+sim 17765078876937074503 67 3282168397  # floors resolved at the stretched row let the view's height change how many rows a tile spans

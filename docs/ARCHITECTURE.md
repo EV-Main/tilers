@@ -146,8 +146,9 @@ in a microtask after the keydown, so it may `notify` synchronously. Precedence i
   floor, never stored. What is layout is that it is collapsed and the width it opens back to
   (`Cell::collapsed`). Nothing but opening sets a spine's width, so it has no width grips.
 - A min belongs to the panel (`DockPanel::min`), not the tile. A cell's floor is derived from its
-  tabs' declared mins at the live column step and the least row, on every measure and tab change;
-  never stored as layout.
+  tabs' declared mins at the column step it renders at (with `scroll_x`, the stretched one) and the
+  least row, on every measure, tab change and settled gesture; never stored as layout. A placement
+  is floored at the least step, which no stretch goes under.
 - A cached layout that is corrupt, from a future schema, or empty is a **miss** that says
   so on the console — never a silent wipe.
 - The framework's global key footprint is exactly `Keymap::root` (the leader being a root scope) ∪

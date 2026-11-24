@@ -47,7 +47,7 @@ pub struct Cell {
 	pub y: u32,
 	pub w: u32,
 	pub h: u32,
-	/// The max of the tabs' resolved [`MinSize`]s at the live step: derived, never layout.
+	/// The max of the tabs' resolved [`MinSize`]s at the column step it renders at and the least row: derived, never layout.
 	#[serde(skip)]
 	pub min_w: u32,
 	#[serde(skip)]

@@ -91,10 +91,19 @@ impl World {
 	}
 
 	/// Px per grid step at the least row, the same `(width / cols, row_h_rem)` [`PackedState::set_measure`]
-	/// derives — what floors resolve at.
+	/// derives — what a spine and a float's floor resolve at.
 	pub fn step_px(&self) -> (f64, f64) {
 		let row = self.cfg.row_h_rem * 16.0; // a native root font is 16px
 		(if self.cfg.scroll_x { row } else { self.size.0 / self.state.cols() as f64 }, row)
+	}
+
+	/// What a tile's floor resolves at: the column step it renders at — with `scroll_x` the least,
+	/// stretched so a layout narrower than the view ends at its right edge — and the least row.
+	pub fn floor_step(&self) -> (f64, f64) {
+		let (sw, row) = self.step_px();
+		let extent = self.state.grid().cells.iter().map(|c| c.x + c.w).max().unwrap_or(0);
+		let stretched = if extent == 0 { sw } else { sw.max((self.size.0 / extent as f64 * 64.0).floor() / 64.0) };
+		(if self.cfg.scroll_x { stretched } else { sw }, row)
 	}
 
 	/// Px per grid step as tiles render, read off a painted frame — the generator needs it to aim a

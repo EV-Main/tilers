@@ -176,6 +176,20 @@ fn columns_at_their_mins_stay_one_row_and_run_past_a_narrow_view() {
 }
 
 #[test]
+fn a_stretched_column_shrinks_down_to_its_min_as_rendered() {
+	let mut state = columns(3, 1600.0);
+	let (left, top, w) = spans(&state)[1];
+	assert!(w > 2.0 * 248.0, "three columns stretched across 1600px: {w}px");
+	let g = state.grid().cells[1].group.id;
+	state.resize_start(g, Grip::Right, left + w, top + 100.0);
+	state.resize_move((left + 260.0, top + 100.0));
+	state.resize_end();
+	let shrunk = spans(&state)[1].2;
+	assert!(shrunk < 300.0, "dragged from {w}px to 260px, it renders {shrunk}px");
+	assert!(shrunk >= 248.0, "shrunk below its 248px min: {shrunk}px");
+}
+
+#[test]
 fn columns_narrower_than_the_view_end_at_its_right_edge() {
 	let mut state = columns(3, 1600.0);
 	let end = right(&state);

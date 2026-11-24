@@ -188,9 +188,9 @@ impl PackedState {
 	/// Auto-pack `group` at a wanted `w×h`, floored by its tabs' declared mins.
 	pub fn place(&mut self, group: Group, w: u32, h: u32) {
 		assert!(self.step_px.0 > 0.0, "place before the first measure: no step size yet");
-		let (floor, cols) = (self.floor(&group.tabs), self.cols);
+		let (floor, cols) = (self.floor(&group.tabs, self.step_px), self.cols);
 		self.base().place(group, w, h, floor, cols);
-		self.follow();
+		self.refloor();
 	}
 
 	pub fn add_tab(&mut self, group: GroupId, panel: PanelId) {
@@ -228,7 +228,7 @@ impl PackedState {
 	/// the view, a step down-right of any float already there, on top and focused.
 	pub fn float(&mut self, group: Group, w: u32, h: u32) {
 		assert!(self.step_px.0 > 0.0, "float before the first measure: no step size yet");
-		let (min_w, min_h) = self.floor(&group.tabs);
+		let (min_w, min_h) = self.floor(&group.tabs, self.step_px);
 		let (vc, vr) = self.view();
 		let (w, h) = (w.max(min_w), h.max(min_h));
 		let (mut x, mut y) = (vc.saturating_sub(w).div_euclid(2), vr.saturating_sub(h).div_euclid(2));
@@ -395,10 +395,9 @@ impl PackedState {
 		self.refloor();
 	}
 
-	/// The floor a tile hosting `tabs` gets at the row's least length, which no stretch goes under: the
-	/// max of their resolved mins.
-	fn floor(&self, tabs: &[PanelId]) -> (u32, u32) {
-		let (sw, sh) = self.step_px;
+	/// The floor a tile hosting `tabs` gets at `step`: the max of their resolved mins. A placement and a
+	/// float take it at the least step, which no stretch goes under; a tile is held to it at the column step it renders at.
+	fn floor(&self, tabs: &[PanelId], (sw, sh): (f64, f64)) -> (u32, u32) {
 		tabs.iter()
 			.map(|p| {
 				self.panels
@@ -410,32 +409,38 @@ impl PackedState {
 			.fold((0, 0), |(w, h), (pw, ph)| (w.max(pw), h.max(ph)))
 	}
 
-	/// Re-derive every cell's floor at the live step, then reflow onto it. A no-op before the first
-	/// measure: there is no step to resolve against, and `set_measure` refloors once there is.
+	/// Re-derive every cell's floor at the column step it renders at and the least row, then reflow onto
+	/// it, until the stretch the floors resolve at is the one they leave. A no-op before the first measure: there is no step
+	/// to resolve against, and `set_measure` refloors once there is.
 	fn refloor(&mut self) {
 		if self.step_px.0 <= 0.0 {
 			return;
 		}
-		let base = self.resize.as_ref().map_or(&self.grid, |r| &r.press);
-		let spine = self.spine();
-		let floors: Vec<(u32, u32)> = base
-			.cells
-			.iter()
-			.map(|c| {
-				let (w, h) = self.floor(&c.group.tabs);
-				(if c.collapsed.is_some() { spine } else { w }, h)
-			})
-			.collect();
-		let float_floors: Vec<(u32, u32)> = base.floats.iter().map(|f| self.floor(&f.group.tabs)).collect();
-		let cols = self.cols;
-		let base = self.base();
-		for (c, (w, h)) in base.cells.iter_mut().zip(floors) {
-			(c.min_w, c.min_h) = (w, h);
+		let (spine, cols) = (self.spine(), self.cols);
+		loop {
+			let step = (self.step().0, self.step_px.1);
+			let base = self.resize.as_ref().map_or(&self.grid, |r| &r.press);
+			let floors: Vec<(u32, u32)> = base
+				.cells
+				.iter()
+				.map(|c| {
+					let (w, h) = self.floor(&c.group.tabs, step);
+					(if c.collapsed.is_some() { spine } else { w }, h)
+				})
+				.collect();
+			let float_floors: Vec<(u32, u32)> = base.floats.iter().map(|f| self.floor(&f.group.tabs, self.step_px)).collect();
+			let base = self.base();
+			for (c, (w, h)) in base.cells.iter_mut().zip(floors) {
+				(c.min_w, c.min_h) = (w, h);
+			}
+			for (f, (w, h)) in base.floats.iter_mut().zip(float_floors) {
+				(f.min_w, f.min_h) = (w, h);
+			}
+			base.refit(cols);
+			if self.step().0 == step.0 {
+				break;
+			}
 		}
-		for (f, (w, h)) in base.floats.iter_mut().zip(float_floors) {
-			(f.min_w, f.min_h) = (w, h);
-		}
-		base.refit(cols);
 		self.follow();
 	}
 
@@ -725,7 +730,7 @@ impl PackedState {
 				(source, w, h, None)
 			}
 			None => {
-				let floor = self.floor(std::slice::from_ref(&panel));
+				let floor = self.floor(std::slice::from_ref(&panel), self.step_px);
 				let (src_w, src_h) = (w.max(floor.0).min(self.cols), h.max(floor.1));
 				(DragSource::Tile(self.grid.clone().mint_group_id()), src_w, src_h, Some((panel, w, h)))
 			}
@@ -764,7 +769,7 @@ impl PackedState {
 	fn landing(&self, g: &mut PackedGrid, d: &Drag) -> DragSource {
 		let Some((panel, w, h)) = &d.incoming else { return d.source.clone() };
 		let gid = g.mint_group_id();
-		g.place(Group::new(gid, panel.clone()), *w, *h, self.floor(std::slice::from_ref(panel)), self.cols);
+		g.place(Group::new(gid, panel.clone()), *w, *h, self.floor(std::slice::from_ref(panel), self.step_px), self.cols);
 		DragSource::Tile(gid)
 	}
 
@@ -1011,6 +1016,7 @@ impl PackedState {
 		}
 		self.grid.state = GridState::Settled;
 		self.grid.reassign_ranks();
+		self.refloor(); // the gesture held the stretch its floors resolved at; the layout it leaves may stretch otherwise
 	}
 
 	/// A body/tab press focuses the pane so keybinds act on whichever pane you last touched. A press

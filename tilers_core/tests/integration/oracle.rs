@@ -1,8 +1,8 @@
 //! The contract checked after every step, independent of the implementation. Split by gesture
 //! state: a resize in flight is packed, but not yet settled into the undo history.
 //!
-//! [`check_settled`] is the model contract: settled, every cell's floor is exactly what its tabs' declared mins need at the live
-//! step, every cell honours it and stays within `cols`, every group is non-empty with `active` in
+//! [`check_settled`] is the model contract: settled, every cell's floor is exactly what its tabs' declared mins need at the column
+//! step it renders at and the least row, every cell honours it and stays within `cols`, every group is non-empty with `active` in
 //! range, ids and panels are unique, and the layout survives a serde round-trip. [`check_in_flight`] runs in both states: the grid is overlap-free and gap-free (no tile floats
 //! above the skyline), and the *render* contract holds — it reads only the view-model getters a binding renders, so it catches drift between them without needing any
 //! new `pub` on [`PackedState`].
@@ -27,7 +27,8 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 	let state = &world.state;
 	let grid = state.grid();
 	let cols = state.cols();
-	let (sw, sh) = world.step_px();
+	let (sw, sh) = world.floor_step();
+	let least_w = world.step_px().0;
 	let title_h = state.title_h();
 	let rem_px = title_h / world.cfg.title_h_rem;
 	if grid.state != GridState::Settled {
@@ -46,9 +47,9 @@ pub fn check_settled(world: &World) -> Result<(), String> {
 			};
 			(w.max(pw), h.max(ph))
 		});
-		let need_w = if c.collapsed.is_some() { title_h } else { need_w }; // a spine is the title bar on its side
+		let (need_w, at_w) = if c.collapsed.is_some() { (title_h, least_w) } else { (need_w, sw) }; // a spine is the title bar on its side, at the least step
 		let tight = |floor: u32, step: f64, need: f64| floor as f64 * step >= need - HAIRLINE && (floor <= 1 || ((floor - 1) as f64) * step < need + HAIRLINE);
-		if !tight(c.min_w, sw, need_w) || !tight(c.min_h, sh, need_h) {
+		if !tight(c.min_w, at_w, need_w) || !tight(c.min_h, sh, need_h) {
 			return Err(format!(
 				"floor {}x{} isn't what its tabs need ({need_w:.1}x{need_h:.1}px at {sw:.2}x{sh:.2}px steps): {c:?}",
 				c.min_w, c.min_h
